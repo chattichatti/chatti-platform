@@ -1,0 +1,26 @@
+{
+  "name": "chatti-platform",
+  "version": "1.0.0",
+  "description": "Chatti Communications Platform - Vonage Reseller Dashboard",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "build": "echo 'No build required'"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "path": "^0.12.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "author": "Chatti Communications",
+  "license": "MIT"
+}
