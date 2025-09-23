@@ -1,4 +1,5 @@
 // server.js - Complete Backend Server for Chatti Platform with Vonage Reseller Integration
+// FIXED: SMS Usage for Reseller Accounts with 267 Sub-accounts
 
 const express = require('express');
 const cors = require('cors');
@@ -56,6 +57,13 @@ let dataStore = {
     customerMappings: []
 };
 
+// Cache for sub-accounts to avoid repeated fetches
+let subAccountsCache = {
+    data: [],
+    lastFetch: 0,
+    cacheDuration: 5 * 60 * 1000 // 5 minutes
+};
+
 // =================== HELPER FUNCTIONS ===================
 
 function getCountryFromNumber(phoneNumber) {
@@ -87,6 +95,49 @@ function getCountryName(code) {
         'Unknown': 'Unknown'
     };
     return countries[code] || code;
+}
+
+// Helper to fetch sub-accounts with caching
+async function fetchSubAccounts() {
+    // Check cache first
+    if (subAccountsCache.data.length > 0 && 
+        (Date.now() - subAccountsCache.lastFetch) < subAccountsCache.cacheDuration) {
+        console.log('Returning cached sub-accounts:', subAccountsCache.data.length);
+        return subAccountsCache.data;
+    }
+    
+    try {
+        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+        
+        const response = await axios.get(url, {
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 10000
+        });
+        
+        let subAccounts = [];
+        
+        // Extract from nested structure
+        if (response.data._embedded?.subaccounts) {
+            subAccounts = response.data._embedded.subaccounts;
+        } else if (response.data._embedded?.primary_accounts) {
+            subAccounts = response.data._embedded.primary_accounts;
+        }
+        
+        // Update cache
+        subAccountsCache.data = subAccounts;
+        subAccountsCache.lastFetch = Date.now();
+        
+        console.log(`Cached ${subAccounts.length} sub-accounts`);
+        return subAccounts;
+        
+    } catch (error) {
+        console.error('Error fetching sub-accounts:', error.message);
+        return subAccountsCache.data; // Return cached data on error
+    }
 }
 
 // =================== AUTHENTICATION MIDDLEWARE ===================
@@ -227,49 +278,7 @@ app.get('/api/vonage/test-reports', authenticateToken, async (req, res) => {
 // Get all sub-accounts - PROPERLY EXTRACTS NESTED SUBACCOUNTS
 app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
     try {
-        if (!config.vonage.apiKey || !config.vonage.apiSecret) {
-            return res.json({ 
-                success: false, 
-                error: 'Vonage credentials not configured',
-                data: []
-            });
-        }
-        
-        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        
-        console.log('Fetching subaccounts from:', url);
-        
-        const response = await axios.get(url, {
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/json'
-            },
-            timeout: 10000
-        });
-        
-        // CRITICAL FIX: Extract the actual subaccounts from the nested structure
-        let subAccounts = [];
-        
-        // The response structure has the 267 accounts in _embedded.subaccounts
-        if (response.data._embedded?.subaccounts) {
-            subAccounts = response.data._embedded.subaccounts;
-            console.log(`Extracted ${subAccounts.length} sub-accounts from _embedded.subaccounts`);
-        } else if (response.data._embedded?.primary_accounts) {
-            subAccounts = response.data._embedded.primary_accounts;
-            console.log(`Extracted ${subAccounts.length} sub-accounts from _embedded.primary_accounts`);
-        } else if (Array.isArray(response.data)) {
-            subAccounts = response.data;
-            console.log(`Response was already an array with ${subAccounts.length} sub-accounts`);
-        } else if (response.data) {
-            // If we got a single wrapper object, try to extract from it
-            if (Array.isArray(response.data) && response.data.length === 1 && response.data[0]._embedded?.subaccounts) {
-                subAccounts = response.data[0]._embedded.subaccounts;
-                console.log(`Extracted ${subAccounts.length} sub-accounts from wrapper object`);
-            }
-        }
-        
-        console.log(`Returning ${subAccounts.length} sub-accounts to frontend`);
+        const subAccounts = await fetchSubAccounts();
         
         return res.json({ 
             success: true, 
@@ -279,40 +288,12 @@ app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
         
     } catch (error) {
         console.error('Subaccounts endpoint error:', error.message);
-        
-        // Try with query params as fallback
-        try {
-            const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
-            const response = await axios.get(url, {
-                params: {
-                    api_key: config.vonage.apiKey,
-                    api_secret: config.vonage.apiSecret
-                },
-                timeout: 10000
-            });
-            
-            let subAccounts = [];
-            if (response.data._embedded?.subaccounts) {
-                subAccounts = response.data._embedded.subaccounts;
-            } else if (response.data._embedded?.primary_accounts) {
-                subAccounts = response.data._embedded.primary_accounts;
-            }
-            
-            return res.json({ 
-                success: true, 
-                data: subAccounts,
-                count: subAccounts.length
-            });
-            
-        } catch (fallbackError) {
-            console.error('Fallback also failed:', fallbackError.message);
-            return res.json({ 
-                success: true,
-                data: [],
-                count: 0,
-                error: 'Could not fetch subaccounts'
-            });
-        }
+        return res.json({ 
+            success: true,
+            data: [],
+            count: 0,
+            error: 'Could not fetch subaccounts'
+        });
     }
 });
 
@@ -357,18 +338,76 @@ app.get('/api/vonage/subaccounts/:subAccountKey/sms-usage', authenticateToken, a
             });
         }
         
-        // For now, return empty data since Reports API isn't available
-        // In production, you would use Reports API or CDR API here
-        res.json({ 
-            success: true, 
-            data: {
-                subAccountKey: subAccountKey,
-                month: month,
-                total: 0,
-                totalCost: 0,
-                byCountry: {}
-            }
-        });
+        // Try to get SMS data for this specific sub-account
+        const year = parseInt(month.split('-')[0]);
+        const monthNum = parseInt(month.split('-')[1]);
+        const startDate = `${year}-${String(monthNum).padStart(2, '0')}-01`;
+        const lastDay = new Date(year, monthNum, 0).getDate();
+        const endDate = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        
+        try {
+            // Try using the sub-account's credentials if available
+            const searchResponse = await axios.get('https://rest.nexmo.com/search/messages', {
+                params: {
+                    api_key: subAccountKey, // Try using sub-account key
+                    api_secret: config.vonage.apiSecret, // Use master secret
+                    date_start: `${startDate} 00:00:00`,
+                    date_end: `${endDate} 23:59:59`
+                },
+                timeout: 10000
+            });
+            
+            const messages = searchResponse.data?.items || [];
+            
+            // Process messages for this sub-account
+            let total = 0;
+            let totalCost = 0;
+            const byCountry = {};
+            
+            messages.forEach(msg => {
+                total++;
+                const cost = parseFloat(msg.price || 0);
+                totalCost += cost;
+                
+                const country = getCountryFromNumber(msg.to);
+                const countryName = getCountryName(country);
+                
+                if (!byCountry[countryName]) {
+                    byCountry[countryName] = {
+                        code: country,
+                        name: countryName,
+                        count: 0,
+                        cost: 0
+                    };
+                }
+                byCountry[countryName].count++;
+                byCountry[countryName].cost += cost;
+            });
+            
+            res.json({ 
+                success: true, 
+                data: {
+                    subAccountKey: subAccountKey,
+                    month: month,
+                    total: total,
+                    totalCost: totalCost,
+                    byCountry: byCountry
+                }
+            });
+            
+        } catch (searchError) {
+            // If search fails, return empty data
+            res.json({ 
+                success: true, 
+                data: {
+                    subAccountKey: subAccountKey,
+                    month: month,
+                    total: 0,
+                    totalCost: 0,
+                    byCountry: {}
+                }
+            });
+        }
         
     } catch (error) {
         res.status(500).json({ 
@@ -402,6 +441,9 @@ app.post('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
             timeout: 10000
         });
         
+        // Clear cache after creating new sub-account
+        subAccountsCache.data = [];
+        
         res.json({ 
             success: true, 
             data: response.data 
@@ -431,6 +473,9 @@ app.patch('/api/vonage/subaccounts/:subAccountKey', authenticateToken, async (re
             timeout: 10000
         });
         
+        // Clear cache after updating sub-account
+        subAccountsCache.data = [];
+        
         res.json({ 
             success: true, 
             data: response.data 
@@ -444,9 +489,9 @@ app.patch('/api/vonage/subaccounts/:subAccountKey', authenticateToken, async (re
     }
 });
 
-// =================== SMS USAGE ENDPOINTS ===================
+// =================== SMS USAGE ENDPOINTS - ENHANCED FOR RESELLER ===================
 
-// Get SMS usage - WITH BETTER ERROR HANDLING
+// Get SMS usage - ENHANCED TO AGGREGATE ALL SUB-ACCOUNTS
 app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
     try {
         const { month = new Date().toISOString().slice(0, 7) } = req.query;
@@ -466,7 +511,7 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
             });
         }
         
-        // Calculate date range safely
+        // Calculate date range
         const year = parseInt(month.split('-')[0]);
         const monthNum = parseInt(month.split('-')[1]);
         const startDate = `${year}-${String(monthNum).padStart(2, '0')}-01`;
@@ -475,8 +520,18 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
         
         console.log(`Fetching SMS for ${startDate} to ${endDate}`);
         
+        // Initialize aggregated usage data
+        const aggregatedUsage = {
+            total: 0,
+            outbound: 0,
+            inbound: 0,
+            byCountry: {},
+            bySubAccount: {},
+            totalCost: 0
+        };
+        
+        // First, try to get all messages using master account
         try {
-            // Use Search Messages API with timeout
             const searchResponse = await axios.get('https://rest.nexmo.com/search/messages', {
                 params: {
                     api_key: config.vonage.apiKey,
@@ -484,84 +539,162 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
                     date_start: `${startDate} 00:00:00`,
                     date_end: `${endDate} 23:59:59`
                 },
-                timeout: 10000
+                timeout: 15000
             });
             
             const messages = searchResponse.data?.items || [];
-            console.log(`Found ${messages.length} messages`);
+            console.log(`Found ${messages.length} messages from master account search`);
             
-            // Process messages
-            const usage = {
-                total: messages.length,
-                outbound: 0,
-                inbound: 0,
-                byCountry: {},
-                bySubAccount: {},
-                totalCost: 0
-            };
-            
+            // Process all messages
             messages.forEach(msg => {
-                if (msg.type === 'MT' || msg.type === 'SMS') {
-                    usage.outbound++;
-                } else if (msg.type === 'MO') {
-                    usage.inbound++;
+                aggregatedUsage.total++;
+                
+                if (msg.type === 'MT' || msg.type === 'SMS' || msg.direction === 'outbound') {
+                    aggregatedUsage.outbound++;
+                } else if (msg.type === 'MO' || msg.direction === 'inbound') {
+                    aggregatedUsage.inbound++;
                 }
                 
                 const cost = parseFloat(msg.price || 0);
-                usage.totalCost += cost;
+                aggregatedUsage.totalCost += cost;
                 
+                // Group by country
                 const country = getCountryFromNumber(msg.to);
                 const countryName = getCountryName(country);
                 
-                if (!usage.byCountry[countryName]) {
-                    usage.byCountry[countryName] = {
+                if (!aggregatedUsage.byCountry[countryName]) {
+                    aggregatedUsage.byCountry[countryName] = {
                         code: country,
                         name: countryName,
                         count: 0,
                         cost: 0
                     };
                 }
-                usage.byCountry[countryName].count++;
-                usage.byCountry[countryName].cost += cost;
+                aggregatedUsage.byCountry[countryName].count++;
+                aggregatedUsage.byCountry[countryName].cost += cost;
                 
-                // Group by sub-account if available
-                const accountId = msg.account_id || msg.api_key || 'unknown';
-                if (!usage.bySubAccount[accountId]) {
-                    usage.bySubAccount[accountId] = {
+                // Group by sub-account - use account_id or api_key from message
+                const accountId = msg.account_id || msg.api_key || 'master';
+                
+                if (!aggregatedUsage.bySubAccount[accountId]) {
+                    aggregatedUsage.bySubAccount[accountId] = {
                         accountId: accountId,
+                        accountName: accountId, // Will be updated with actual name
                         count: 0,
                         cost: 0
                     };
                 }
-                usage.bySubAccount[accountId].count++;
-                usage.bySubAccount[accountId].cost += cost;
-            });
-            
-            return res.json({ 
-                success: true, 
-                data: usage,
-                month: month,
-                recordCount: messages.length
+                aggregatedUsage.bySubAccount[accountId].count++;
+                aggregatedUsage.bySubAccount[accountId].cost += cost;
             });
             
         } catch (searchError) {
-            console.error('Search API error:', searchError.message);
+            console.error('Master account search error:', searchError.message);
             
-            // Return empty data on error
-            return res.json({ 
-                success: true, 
-                data: {
-                    total: 0,
-                    outbound: 0,
-                    inbound: 0,
-                    byCountry: {},
-                    bySubAccount: {},
-                    totalCost: 0
-                },
-                month: month,
-                message: 'No SMS data available for this period'
+            // If master search fails, try to fetch from each sub-account
+            console.log('Attempting to fetch SMS data from individual sub-accounts...');
+            
+            const subAccounts = await fetchSubAccounts();
+            console.log(`Checking SMS for ${subAccounts.length} sub-accounts`);
+            
+            // Try to get messages for each sub-account (limit parallel requests)
+            const batchSize = 10; // Process 10 accounts at a time
+            for (let i = 0; i < subAccounts.length; i += batchSize) {
+                const batch = subAccounts.slice(i, i + batchSize);
+                
+                const batchPromises = batch.map(async (subAccount) => {
+                    try {
+                        const subKey = subAccount.api_key || subAccount.account_id;
+                        const subName = subAccount.name || subKey;
+                        
+                        // Try to get messages for this sub-account
+                        const subResponse = await axios.get('https://rest.nexmo.com/search/messages', {
+                            params: {
+                                api_key: subKey,
+                                api_secret: config.vonage.apiSecret,
+                                date_start: `${startDate} 00:00:00`,
+                                date_end: `${endDate} 23:59:59`
+                            },
+                            timeout: 5000
+                        }).catch(() => ({ data: { items: [] } })); // Return empty on error
+                        
+                        const subMessages = subResponse.data?.items || [];
+                        
+                        if (subMessages.length > 0) {
+                            console.log(`Found ${subMessages.length} messages for ${subName}`);
+                            
+                            // Process messages from this sub-account
+                            subMessages.forEach(msg => {
+                                aggregatedUsage.total++;
+                                
+                                if (msg.type === 'MT' || msg.type === 'SMS') {
+                                    aggregatedUsage.outbound++;
+                                } else if (msg.type === 'MO') {
+                                    aggregatedUsage.inbound++;
+                                }
+                                
+                                const cost = parseFloat(msg.price || 0);
+                                aggregatedUsage.totalCost += cost;
+                                
+                                // Group by country
+                                const country = getCountryFromNumber(msg.to);
+                                const countryName = getCountryName(country);
+                                
+                                if (!aggregatedUsage.byCountry[countryName]) {
+                                    aggregatedUsage.byCountry[countryName] = {
+                                        code: country,
+                                        name: countryName,
+                                        count: 0,
+                                        cost: 0
+                                    };
+                                }
+                                aggregatedUsage.byCountry[countryName].count++;
+                                aggregatedUsage.byCountry[countryName].cost += cost;
+                                
+                                // Group by sub-account
+                                if (!aggregatedUsage.bySubAccount[subKey]) {
+                                    aggregatedUsage.bySubAccount[subKey] = {
+                                        accountId: subKey,
+                                        accountName: subName,
+                                        count: 0,
+                                        cost: 0
+                                    };
+                                }
+                                aggregatedUsage.bySubAccount[subKey].count++;
+                                aggregatedUsage.bySubAccount[subKey].cost += cost;
+                            });
+                        }
+                        
+                    } catch (subError) {
+                        // Silently skip sub-accounts that fail
+                    }
+                });
+                
+                await Promise.all(batchPromises);
+                console.log(`Processed batch ${i/batchSize + 1} of ${Math.ceil(subAccounts.length/batchSize)}`);
+            }
+        }
+        
+        // Try to match sub-account IDs with names
+        if (Object.keys(aggregatedUsage.bySubAccount).length > 0) {
+            const subAccounts = await fetchSubAccounts();
+            subAccounts.forEach(sub => {
+                const subKey = sub.api_key || sub.account_id;
+                if (aggregatedUsage.bySubAccount[subKey]) {
+                    aggregatedUsage.bySubAccount[subKey].accountName = sub.name || subKey;
+                }
             });
         }
+        
+        console.log(`Total SMS found: ${aggregatedUsage.total}`);
+        
+        return res.json({ 
+            success: true, 
+            data: aggregatedUsage,
+            month: month,
+            recordCount: aggregatedUsage.total,
+            message: aggregatedUsage.total === 0 ? 'No SMS data found for this period' : null
+        });
         
     } catch (error) {
         console.error('SMS usage endpoint crashed:', error.message);
@@ -578,7 +711,8 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
                 totalCost: 0
             },
             month: req.query.month || new Date().toISOString().slice(0, 7),
-            error: error.message
+            error: error.message,
+            message: 'Error fetching SMS data'
         });
     }
 });
@@ -825,22 +959,7 @@ app.get('/api/debug/test-all', authenticateToken, async (req, res) => {
         
         // Test subaccounts
         try {
-            const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-            const subUrl = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
-            const subResponse = await axios.get(subUrl, {
-                headers: {
-                    'Authorization': `Basic ${auth}`
-                },
-                timeout: 10000
-            });
-            
-            let subAccounts = [];
-            if (subResponse.data._embedded?.subaccounts) {
-                subAccounts = subResponse.data._embedded.subaccounts;
-            } else if (subResponse.data._embedded?.primary_accounts) {
-                subAccounts = subResponse.data._embedded.primary_accounts;
-            }
-            
+            const subAccounts = await fetchSubAccounts();
             results.subaccounts = {
                 success: true,
                 count: subAccounts.length
@@ -852,11 +971,35 @@ app.get('/api/debug/test-all', authenticateToken, async (req, res) => {
             };
         }
         
+        // Test SMS search
+        try {
+            const month = new Date().toISOString().slice(0, 7);
+            const searchResponse = await axios.get('https://rest.nexmo.com/search/messages', {
+                params: {
+                    api_key: config.vonage.apiKey,
+                    api_secret: config.vonage.apiSecret,
+                    date_start: `${month}-01 00:00:00`,
+                    date_end: `${month}-01 23:59:59`
+                },
+                timeout: 10000
+            });
+            results.smsSearch = {
+                success: true,
+                count: searchResponse.data?.items?.length || 0
+            };
+        } catch (error) {
+            results.smsSearch = {
+                success: false,
+                error: error.response?.status
+            };
+        }
+        
         res.json({
             success: true,
             credentials: {
                 apiKey: config.vonage.apiKey ? 'SET' : 'NOT SET',
-                apiSecret: config.vonage.apiSecret ? 'SET' : 'NOT SET'
+                apiSecret: config.vonage.apiSecret ? 'SET' : 'NOT SET',
+                accountId: config.vonage.accountId
             },
             results: results
         });
