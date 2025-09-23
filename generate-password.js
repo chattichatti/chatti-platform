@@ -1,13 +1,12 @@
 const bcrypt = require('bcryptjs');
 
-// Change this to your desired password
-const password = 'ChattiSecure2024!';
+// Set your new password here
+const password = 'Ancr0320!!';  // Use whatever password you want
 
 const salt = bcrypt.genSaltSync(10);
 const hash = bcrypt.hashSync(password, salt);
 
 console.log('\n=================================');
-console.log('Password:', password);
-console.log('Hash:', hash);
+console.log('Your login password is:', password);
+console.log('Put this hash in server.js:', hash);
 console.log('=================================\n');
-console.log('Copy the hash above and add it to your server.js file');
