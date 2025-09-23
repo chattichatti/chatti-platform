@@ -222,9 +222,9 @@ app.get('/api/vonage/test-reports', authenticateToken, async (req, res) => {
     });
 });
 
-// =================== VONAGE SUBACCOUNTS API ===================
+// =================== VONAGE SUBACCOUNTS API - FIXED TO EXTRACT 267 ACCOUNTS ===================
 
-// Get all sub-accounts - WITH BETTER ERROR HANDLING
+// Get all sub-accounts - PROPERLY EXTRACTS NESTED SUBACCOUNTS
 app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
     try {
         if (!config.vonage.apiKey || !config.vonage.apiSecret) {
@@ -235,93 +235,84 @@ app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
             });
         }
         
-        // Try multiple endpoint formats
-        const endpoints = [
-            // Format 1: api.nexmo.com with account ID (Vonage support said this)
-            {
-                url: `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`,
-                auth: 'basic'
-            },
-            // Format 2: api.nexmo.com with query params
-            {
-                url: `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`,
-                auth: 'params'
-            },
-            // Format 3: rest.nexmo.com with API key (ChatGPT version)
-            {
-                url: `https://rest.nexmo.com/accounts/${config.vonage.apiKey}/subaccounts`,
-                auth: 'params'
-            }
-        ];
+        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
         
-        for (const endpoint of endpoints) {
-            try {
-                console.log(`Trying endpoint: ${endpoint.url} with ${endpoint.auth} auth`);
-                
-                let response;
-                if (endpoint.auth === 'basic') {
-                    const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-                    response = await axios.get(endpoint.url, {
-                        headers: {
-                            'Authorization': `Basic ${auth}`,
-                            'Content-Type': 'application/json'
-                        },
-                        timeout: 10000
-                    });
-                } else {
-                    response = await axios.get(endpoint.url, {
-                        params: {
-                            api_key: config.vonage.apiKey,
-                            api_secret: config.vonage.apiSecret
-                        },
-                        timeout: 10000
-                    });
-                }
-                
-                // Try to parse response in different formats
-                let subAccounts = [];
-                if (response.data._embedded?.primary_accounts) {
-                    subAccounts = response.data._embedded.primary_accounts;
-                } else if (response.data.primary_accounts) {
-                    subAccounts = response.data.primary_accounts;
-                } else if (Array.isArray(response.data)) {
-                    subAccounts = response.data;
-                } else if (response.data) {
-                    // Maybe the whole response is the accounts array
-                    subAccounts = [response.data];
-                }
-                
-                console.log(`Success! Found ${subAccounts.length} sub-accounts`);
-                
-                return res.json({ 
-                    success: true, 
-                    data: subAccounts,
-                    count: subAccounts.length
-                });
-                
-            } catch (err) {
-                console.log(`Failed: ${err.message}`);
-                continue; // Try next endpoint
+        console.log('Fetching subaccounts from:', url);
+        
+        const response = await axios.get(url, {
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 10000
+        });
+        
+        // CRITICAL FIX: Extract the actual subaccounts from the nested structure
+        let subAccounts = [];
+        
+        // The response structure has the 267 accounts in _embedded.subaccounts
+        if (response.data._embedded?.subaccounts) {
+            subAccounts = response.data._embedded.subaccounts;
+            console.log(`Extracted ${subAccounts.length} sub-accounts from _embedded.subaccounts`);
+        } else if (response.data._embedded?.primary_accounts) {
+            subAccounts = response.data._embedded.primary_accounts;
+            console.log(`Extracted ${subAccounts.length} sub-accounts from _embedded.primary_accounts`);
+        } else if (Array.isArray(response.data)) {
+            subAccounts = response.data;
+            console.log(`Response was already an array with ${subAccounts.length} sub-accounts`);
+        } else if (response.data) {
+            // If we got a single wrapper object, try to extract from it
+            if (Array.isArray(response.data) && response.data.length === 1 && response.data[0]._embedded?.subaccounts) {
+                subAccounts = response.data[0]._embedded.subaccounts;
+                console.log(`Extracted ${subAccounts.length} sub-accounts from wrapper object`);
             }
         }
         
-        // All endpoints failed
-        console.error('All subaccount endpoints failed');
+        console.log(`Returning ${subAccounts.length} sub-accounts to frontend`);
+        
         return res.json({ 
-            success: true,
-            data: [],
-            count: 0,
-            message: 'Could not fetch subaccounts from any endpoint'
+            success: true, 
+            data: subAccounts,
+            count: subAccounts.length
         });
         
     } catch (error) {
-        console.error('Subaccounts endpoint crashed:', error.message);
-        return res.json({ 
-            success: true,
-            data: [],
-            count: 0,
-            error: error.message
-        });
+        console.error('Subaccounts endpoint error:', error.message);
+        
+        // Try with query params as fallback
+        try {
+            const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
+            const response = await axios.get(url, {
+                params: {
+                    api_key: config.vonage.apiKey,
+                    api_secret: config.vonage.apiSecret
+                },
+                timeout: 10000
+            });
+            
+            let subAccounts = [];
+            if (response.data._embedded?.subaccounts) {
+                subAccounts = response.data._embedded.subaccounts;
+            } else if (response.data._embedded?.primary_accounts) {
+                subAccounts = response.data._embedded.primary_accounts;
+            }
+            
+            return res.json({ 
+                success: true, 
+                data: subAccounts,
+                count: subAccounts.length
+            });
+            
+        } catch (fallbackError) {
+            console.error('Fallback also failed:', fallbackError.message);
+            return res.json({ 
+                success: true,
+                data: [],
+                count: 0,
+                error: 'Could not fetch subaccounts'
+            });
+        }
     }
 });
 
@@ -349,6 +340,40 @@ app.get('/api/vonage/subaccounts/:subAccountKey', authenticateToken, async (req,
         res.json({ 
             success: false, 
             error: error.response?.data?.error_text || error.message 
+        });
+    }
+});
+
+// Get SMS usage for a specific sub-account
+app.get('/api/vonage/subaccounts/:subAccountKey/sms-usage', authenticateToken, async (req, res) => {
+    try {
+        const { subAccountKey } = req.params;
+        const { month = new Date().toISOString().slice(0, 7) } = req.query;
+        
+        if (!subAccountKey || subAccountKey === 'undefined') {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Invalid sub-account key' 
+            });
+        }
+        
+        // For now, return empty data since Reports API isn't available
+        // In production, you would use Reports API or CDR API here
+        res.json({ 
+            success: true, 
+            data: {
+                subAccountKey: subAccountKey,
+                month: month,
+                total: 0,
+                totalCost: 0,
+                byCountry: {}
+            }
+        });
+        
+    } catch (error) {
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
         });
     }
 });
@@ -390,7 +415,7 @@ app.post('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
     }
 });
 
-// Update sub-account - USE PATCH METHOD AS VONAGE CONFIRMED
+// Update sub-account
 app.patch('/api/vonage/subaccounts/:subAccountKey', authenticateToken, async (req, res) => {
     try {
         const { subAccountKey } = req.params;
@@ -459,7 +484,7 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
                     date_start: `${startDate} 00:00:00`,
                     date_end: `${endDate} 23:59:59`
                 },
-                timeout: 10000 // 10 second timeout
+                timeout: 10000
             });
             
             const messages = searchResponse.data?.items || [];
@@ -498,6 +523,18 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
                 }
                 usage.byCountry[countryName].count++;
                 usage.byCountry[countryName].cost += cost;
+                
+                // Group by sub-account if available
+                const accountId = msg.account_id || msg.api_key || 'unknown';
+                if (!usage.bySubAccount[accountId]) {
+                    usage.bySubAccount[accountId] = {
+                        accountId: accountId,
+                        count: 0,
+                        cost: 0
+                    };
+                }
+                usage.bySubAccount[accountId].count++;
+                usage.bySubAccount[accountId].cost += cost;
             });
             
             return res.json({ 
@@ -522,7 +559,7 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
                     totalCost: 0
                 },
                 month: month,
-                message: 'No SMS data available'
+                message: 'No SMS data available for this period'
             });
         }
         
@@ -698,16 +735,7 @@ app.get('/api/xero/contacts', authenticateToken, async (req, res) => {
 // =================== OTHER ENDPOINTS ===================
 
 app.get('/api/customers', authenticateToken, (req, res) => {
-    const customers = dataStore.customers.length > 0 ? dataStore.customers : [
-        {
-            id: 1,
-            name: 'Demo Customer 1',
-            vonageAccount: 'demo-key-1',
-            xeroContact: 'XERO-ABC123',
-            currentSMS: 0
-        }
-    ];
-    
+    const customers = dataStore.customers.length > 0 ? dataStore.customers : [];
     res.json({ success: true, data: customers });
 });
 
@@ -806,7 +834,13 @@ app.get('/api/debug/test-all', authenticateToken, async (req, res) => {
                 timeout: 10000
             });
             
-            const subAccounts = subResponse.data._embedded?.primary_accounts || [];
+            let subAccounts = [];
+            if (subResponse.data._embedded?.subaccounts) {
+                subAccounts = subResponse.data._embedded.subaccounts;
+            } else if (subResponse.data._embedded?.primary_accounts) {
+                subAccounts = subResponse.data._embedded.primary_accounts;
+            }
+            
             results.subaccounts = {
                 success: true,
                 count: subAccounts.length
