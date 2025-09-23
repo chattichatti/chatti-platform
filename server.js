@@ -220,240 +220,246 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
     }
 });
 
-// =================== PROTECTED VONAGE ENDPOINTS ===================
+// =================== VONAGE RESELLER API ENDPOINTS ===================
 
-// Get SMS usage summary - REAL Vonage API
+// Get all sub-accounts under your master account
+app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
+    try {
+        if (!config.vonage.apiKey || !config.vonage.apiSecret) {
+            return res.json({ success: false, error: 'Vonage not configured' });
+        }
+        
+        // Use your master account ID
+        const masterAccountId = '4c42609f'; // Your master account
+        
+        const response = await axios.get(`${config.vonage.baseUrl}/accounts/${masterAccountId}/subaccounts`, {
+            params: {
+                api_key: config.vonage.apiKey,
+                api_secret: config.vonage.apiSecret
+            }
+        });
+        
+        res.json({ 
+            success: true, 
+            data: response.data._embedded?.primary_accounts || []
+        });
+        
+    } catch (error) {
+        console.error('Vonage subaccounts error:', error.response?.data || error.message);
+        res.json({ 
+            success: false, 
+            error: error.response?.data?.error_text || error.message 
+        });
+    }
+});
+
+// Create a new sub-account
+app.post('/api/vonage/subaccounts/create', authenticateToken, async (req, res) => {
+    try {
+        const { name, secret, use_primary_account_balance } = req.body;
+        
+        const response = await axios.post(`${config.vonage.baseUrl}/accounts/4c42609f/subaccounts`, {
+            name: name,
+            secret: secret || undefined,
+            use_primary_account_balance: use_primary_account_balance || true
+        }, {
+            params: {
+                api_key: config.vonage.apiKey,
+                api_secret: config.vonage.apiSecret
+            }
+        });
+        
+        res.json({ 
+            success: true, 
+            data: response.data 
+        });
+        
+    } catch (error) {
+        console.error('Create subaccount error:', error.response?.data || error.message);
+        res.json({ 
+            success: false, 
+            error: error.response?.data?.error_text || error.message 
+        });
+    }
+});
+
+// Get sub-account details
+app.get('/api/vonage/subaccounts/:subAccountId', authenticateToken, async (req, res) => {
+    try {
+        const { subAccountId } = req.params;
+        
+        const response = await axios.get(`${config.vonage.baseUrl}/accounts/4c42609f/subaccounts/${subAccountId}`, {
+            params: {
+                api_key: config.vonage.apiKey,
+                api_secret: config.vonage.apiSecret
+            }
+        });
+        
+        res.json({ 
+            success: true, 
+            data: response.data 
+        });
+        
+    } catch (error) {
+        res.json({ 
+            success: false, 
+            error: error.response?.data?.error_text || error.message 
+        });
+    }
+});
+
+// Update sub-account
+app.patch('/api/vonage/subaccounts/:subAccountId', authenticateToken, async (req, res) => {
+    try {
+        const { subAccountId } = req.params;
+        const { suspended, use_primary_account_balance, name } = req.body;
+        
+        const response = await axios.patch(`${config.vonage.baseUrl}/accounts/4c42609f/subaccounts/${subAccountId}`, {
+            suspended: suspended,
+            use_primary_account_balance: use_primary_account_balance,
+            name: name
+        }, {
+            params: {
+                api_key: config.vonage.apiKey,
+                api_secret: config.vonage.apiSecret
+            }
+        });
+        
+        res.json({ 
+            success: true, 
+            data: response.data 
+        });
+        
+    } catch (error) {
+        res.json({ 
+            success: false, 
+            error: error.response?.data?.error_text || error.message 
+        });
+    }
+});
+
+// Transfer credit between accounts
+app.post('/api/vonage/credit-transfer', authenticateToken, async (req, res) => {
+    try {
+        const { from, to, amount, reference } = req.body;
+        
+        const response = await axios.post(`${config.vonage.baseUrl}/accounts/4c42609f/credit-transfers`, {
+            from: from,
+            to: to,
+            amount: amount,
+            reference: reference || 'Credit transfer'
+        }, {
+            params: {
+                api_key: config.vonage.apiKey,
+                api_secret: config.vonage.apiSecret
+            }
+        });
+        
+        res.json({ 
+            success: true, 
+            data: response.data 
+        });
+        
+    } catch (error) {
+        res.json({ 
+            success: false, 
+            error: error.response?.data?.error_text || error.message 
+        });
+    }
+});
+
+// Get balance transfers history
+app.get('/api/vonage/balance-transfers', authenticateToken, async (req, res) => {
+    try {
+        const { start_date, end_date, subaccount } = req.query;
+        
+        const response = await axios.get(`${config.vonage.baseUrl}/accounts/4c42609f/balance-transfers`, {
+            params: {
+                api_key: config.vonage.apiKey,
+                api_secret: config.vonage.apiSecret,
+                start_date: start_date,
+                end_date: end_date,
+                subaccount: subaccount
+            }
+        });
+        
+        res.json({ 
+            success: true, 
+            data: response.data 
+        });
+        
+    } catch (error) {
+        res.json({ 
+            success: false, 
+            error: error.response?.data?.error_text || error.message 
+        });
+    }
+});
+
+// Get SMS usage for all sub-accounts
 app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
     try {
         const { month } = req.query;
         
-        // Check if we have Vonage credentials
-        if (!config.vonage.apiKey || !config.vonage.apiSecret) {
-            // Return demo data if no credentials
-            const demoUsage = {
-                total: 45678,
-                inbound: 12345,
-                outbound: 33333,
-                byCountry: [
-                    { country: 'Australia', code: 'AU', inbound: 5000, outbound: 15000 },
-                    { country: 'United States', code: 'US', inbound: 3000, outbound: 8000 },
-                    { country: 'United Kingdom', code: 'UK', inbound: 2000, outbound: 6000 },
-                    { country: 'Singapore', code: 'SG', inbound: 2345, outbound: 4333 }
-                ],
-                demo: true,
-                message: 'Vonage API credentials not configured'
-            };
-            return res.json({ success: true, data: demoUsage });
-        }
-        
-        // Calculate date range for the month
-        let startDate, endDate;
-        if (month) {
-            startDate = `${month}-01`;
-            const date = new Date(startDate);
-            date.setMonth(date.getMonth() + 1);
-            date.setDate(0);
-            endDate = date.toISOString().slice(0, 10);
-        } else {
-            // Current month
-            const now = new Date();
-            startDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-            endDate = now.toISOString().slice(0, 10);
-        }
-        
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        
-        // Try to get SMS records from Vonage Reports API
-        let records = [];
-        try {
-            const response = await axios.get('https://api.nexmo.com/v2/reports/records', {
-                headers: {
-                    'Authorization': `Basic ${auth}`,
-                    'Content-Type': 'application/json'
-                },
-                params: {
-                    account_id: config.vonage.accountId || config.vonage.apiKey,
-                    product: 'SMS',
-                    date_start: startDate,
-                    date_end: endDate,
-                    include_subaccounts: 'true'
-                }
-            });
-            
-            if (response.data && response.data.records) {
-                records = response.data.records;
-            }
-        } catch (apiError) {
-            console.log('Reports API v2 failed, trying Messages API...');
-            
-            // Fallback to Messages API
-            try {
-                const messagesResponse = await axios.get(`${config.vonage.baseUrl}/v1/messages`, {
-                    headers: {
-                        'Authorization': `Basic ${auth}`,
-                        'Content-Type': 'application/json'
-                    },
-                    params: {
-                        date_start: startDate,
-                        date_end: endDate
-                    }
-                });
-                
-                if (messagesResponse.data && messagesResponse.data._embedded) {
-                    records = messagesResponse.data._embedded.messages || [];
-                }
-            } catch (msgError) {
-                console.log('Messages API also failed, using account statistics...');
-            }
-        }
-        
-        // Process records if we have them
-        let totalInbound = 0;
-        let totalOutbound = 0;
-        const byCountry = {};
-        
-        if (records.length > 0) {
-            records.forEach(record => {
-                const countryCode = getCountryFromNumber(record.to || record.msisdn);
-                
-                if (!byCountry[countryCode]) {
-                    byCountry[countryCode] = {
-                        country: getCountryName(countryCode),
-                        code: countryCode,
-                        inbound: 0,
-                        outbound: 0
-                    };
-                }
-                
-                const direction = record.direction || record.message_type;
-                if (direction === 'inbound' || direction === 'mo' || direction === 'inbound-sms') {
-                    totalInbound++;
-                    byCountry[countryCode].inbound++;
-                } else if (direction === 'outbound' || direction === 'mt' || direction === 'outbound-sms') {
-                    totalOutbound++;
-                    byCountry[countryCode].outbound++;
-                }
-            });
-        } else {
-            // If no records, return demo data with API connection confirmed
-            const demoUsage = {
-                total: 0,
-                inbound: 0,
-                outbound: 0,
-                byCountry: [],
-                month: month || 'current',
-                message: 'No SMS data found for this period. API connection successful.',
-                apiConnected: true
-            };
-            return res.json({ success: true, data: demoUsage });
-        }
-        
-        const usage = {
-            total: totalInbound + totalOutbound,
-            inbound: totalInbound,
-            outbound: totalOutbound,
-            byCountry: Object.values(byCountry),
-            month: month || 'current'
-        };
-        
-        res.json({ success: true, data: usage });
-        
-    } catch (error) {
-        console.error('Vonage API error:', error.response?.data || error.message);
-        
-        // Return demo data if API fails
-        const demoUsage = {
-            total: 45678,
-            inbound: 12345,
-            outbound: 33333,
-            byCountry: [
-                { country: 'Australia', code: 'AU', inbound: 5000, outbound: 15000 },
-                { country: 'United States', code: 'US', inbound: 3000, outbound: 8000 },
-                { country: 'United Kingdom', code: 'UK', inbound: 2000, outbound: 6000 },
-                { country: 'Singapore', code: 'SG', inbound: 2345, outbound: 4333 }
-            ],
-            demo: true,
-            error: error.message
-        };
-        
-        res.json({ success: true, data: demoUsage });
-    }
-});
-
-// Get customer SMS usage (protected)
-app.get('/api/vonage/usage/customer/:customerId', authenticateToken, async (req, res) => {
-    try {
-        const { customerId } = req.params;
-        const { month } = req.query;
-        
-        // For now, return demo data
-        // TODO: Implement filtering by customer sub-account
-        const usage = {
-            customerId,
-            month: month || new Date().toISOString().slice(0, 7),
-            inbound: 1230,
-            outbound: 4200,
-            total: 5430,
-            byCountry: [
-                { country: 'AU', inbound: 800, outbound: 3000 },
-                { country: 'US', inbound: 430, outbound: 1200 }
-            ]
-        };
-        
-        res.json({ success: true, data: usage });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// Get phone numbers by customer (protected)
-app.get('/api/vonage/numbers/:customerId', authenticateToken, async (req, res) => {
-    try {
-        const { customerId } = req.params;
-        
         if (!config.vonage.apiKey || !config.vonage.apiSecret) {
             return res.json({ 
-                success: true, 
-                data: { AU: 3, US: 2, UK: 1 },
-                demo: true 
+                success: false, 
+                error: 'Vonage not configured' 
             });
         }
         
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        
-        // Get all numbers from account
-        const response = await axios.get(`${config.vonage.baseUrl}/account/numbers`, {
-            headers: {
-                'Authorization': `Basic ${auth}`
-            },
+        // First, get all sub-accounts
+        const subAccountsResponse = await axios.get(`${config.vonage.baseUrl}/accounts/4c42609f/subaccounts`, {
             params: {
-                size: 100
+                api_key: config.vonage.apiKey,
+                api_secret: config.vonage.apiSecret
             }
         });
         
-        // Count numbers by country
-        const numbersByCountry = {};
+        const subAccounts = subAccountsResponse.data._embedded?.primary_accounts || [];
         
-        if (response.data && response.data.numbers) {
-            response.data.numbers.forEach(number => {
-                const country = number.country || 'Unknown';
-                numbersByCountry[country] = (numbersByCountry[country] || 0) + 1;
-            });
+        // Aggregate usage data
+        const usage = {
+            total: 0,
+            inbound: 0,
+            outbound: 0,
+            byCountry: {},
+            byCustomer: []
+        };
+        
+        // For each sub-account, get their balance and details
+        for (const account of subAccounts) {
+            const customerUsage = {
+                accountId: account.api_key,
+                name: account.name,
+                balance: account.balance,
+                credit_limit: account.credit_limit,
+                suspended: account.suspended
+            };
+            
+            usage.byCustomer.push(customerUsage);
         }
         
-        res.json({ success: true, data: numbersByCountry });
+        // Note: Detailed SMS records require Reports API v2 or CDR downloads
+        // This gives you account structure and balances
         
-    } catch (error) {
-        console.error('Vonage numbers error:', error.response?.data || error.message);
         res.json({ 
             success: true, 
-            data: { AU: 3, US: 2, UK: 1 },
-            demo: true,
-            error: error.message
+            data: {
+                ...usage,
+                accounts: subAccounts,
+                message: 'Showing account balances. For SMS records, enable Reports API v2 in your Vonage account.'
+            }
+        });
+        
+    } catch (error) {
+        console.error('Vonage error:', error.response?.data || error.message);
+        res.json({ 
+            success: false, 
+            error: error.response?.data?.error_text || error.message 
         });
     }
 });
-
 // =================== PROTECTED XERO ENDPOINTS ===================
 
 // Get Xero auth URL (protected)
