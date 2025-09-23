@@ -622,36 +622,92 @@
 
     <script>
         // Global variables
-        let authToken = localStorage.getItem('authToken');
+        let authToken = null;
         let currentUser = null;
 
-        // Check if user is already logged in
-        if (authToken) {
-            validateToken();
-        }
+        // Auto-login on page load (your original working method)
+        window.addEventListener('DOMContentLoaded', async () => {
+            await autoLogin();
+        });
 
         // API Helper with automatic authentication
         async function apiCall(url, options = {}) {
+            // Make sure we have a token
+            if (!authToken) {
+                console.error('No auth token available');
+                return { success: false, error: 'Not authenticated' };
+            }
+
             const defaultOptions = {
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${authToken}`
-                }
+                },
+                ...options
             };
 
-            const response = await fetch(url, { ...defaultOptions, ...options });
-            
-            if (response.status === 401 || response.status === 403) {
-                // Token expired or invalid
-                localStorage.removeItem('authToken');
-                showLogin();
-                throw new Error('Authentication failed');
+            // If options has headers, merge them
+            if (options.headers) {
+                defaultOptions.headers = { ...defaultOptions.headers, ...options.headers };
             }
-            
-            return response.json();
+
+            try {
+                const response = await fetch(url, defaultOptions);
+                
+                if (response.status === 401 || response.status === 403) {
+                    // Token expired or invalid - try to auto-login again
+                    console.log('Token expired, attempting auto-login...');
+                    await autoLogin();
+                    // Retry the request with new token
+                    if (authToken) {
+                        defaultOptions.headers.Authorization = `Bearer ${authToken}`;
+                        const retryResponse = await fetch(url, defaultOptions);
+                        return retryResponse.json();
+                    }
+                    throw new Error('Authentication failed');
+                }
+                
+                return response.json();
+            } catch (error) {
+                console.error('API call error:', error);
+                return { success: false, error: error.message };
+            }
         }
 
-        // Login functionality
+        // Auto-login functionality (your original working method)
+        async function autoLogin() {
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: 'admin@chatti.com',
+                        password: 'changeme123'  // Your demo password
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    authToken = data.token;
+                    currentUser = data.user;
+                    localStorage.setItem('authToken', authToken);
+                    showApp();
+                    loadDashboard();
+                    return true;
+                } else {
+                    console.error('Auto-login failed:', data.message);
+                    showLogin();
+                    return false;
+                }
+            } catch (error) {
+                console.error('Auto-login error:', error);
+                showLogin();
+                return false;
+            }
+        }
+
+        // Manual login functionality (if auto-login fails)
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
@@ -681,23 +737,6 @@
             }
         });
 
-        // Validate stored token
-        async function validateToken() {
-            try {
-                const data = await apiCall('/api/vonage/test');
-                if (data.success) {
-                    showApp();
-                    loadDashboard();
-                } else {
-                    localStorage.removeItem('authToken');
-                    showLogin();
-                }
-            } catch (error) {
-                localStorage.removeItem('authToken');
-                showLogin();
-            }
-        }
-
         function showLoginMessage(type, message) {
             const messageDiv = document.getElementById('loginMessage');
             messageDiv.className = type === 'error' ? 'error-message' : 'success-message';
@@ -714,7 +753,7 @@
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('appScreen').style.display = 'block';
             if (currentUser) {
-                document.getElementById('userEmail').textContent = currentUser.email;
+                document.getElementById('userEmail').textContent = currentUser.email || 'admin@chatti.com';
             }
         }
 
