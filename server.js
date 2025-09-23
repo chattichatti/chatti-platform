@@ -27,7 +27,7 @@ const users = [
     {
         id: 1,
         email: 'admin@chatti.com',
-        password: '$2b$10$EUEtc70yz.lwfDi2n3fwjOci5jjTx3xYYGc0n89DpzFbr1c/XrDn.', // <-- REPLACE WITH YOUR GENERATED HASH
+        password: '$2b$10$izO0mAq30rYRQuNwpWm/0O73dDbF6LHzq81d57aq/cpVWDQ8dvrmW', // <-- REPLACE WITH YOUR GENERATED HASH
         role: 'admin',
         name: 'Admin User'
     }
