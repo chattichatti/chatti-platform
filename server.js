@@ -27,7 +27,7 @@ const users = [
     {
         id: 1,
         email: 'admin@chatti.com',
-        password: '$2b$10$XcwjgM3ME8avNSbe8I1LiuyfcmDV0xJukspdvZ18tihi9ZijBNtWy', // Keep your existing hash
+        password: '$2b$10$hewTMmw3Y2UaZYLdW6Z2v.7jYXt20XouMG5ogc/rqBGOXHFKJhBh6', // Keep your existing hash
         role: 'admin',
         name: 'Admin User'
     }
