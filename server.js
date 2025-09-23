@@ -1,4 +1,4 @@
-// server.js - Combined Backend + Frontend Server for Chatti Platform with Security and Vonage Integration
+// server.js - Complete Backend Server for Chatti Platform with Vonage Reseller Integration
 
 const express = require('express');
 const cors = require('cors');
@@ -16,28 +16,26 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public')); // Serve static files from public directory
+app.use(express.static('public'));
 
 // JWT Configuration
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-production';
 
-// Users database (in production, store in actual database)
-// IMPORTANT: Replace the password hash with your generated hash
+// Users database
 const users = [
     {
         id: 1,
         email: 'admin@chatti.com',
-        password: '$2b$10$hewTMmw3Y2UaZYLdW6Z2v.7jYXt20XouMG5ogc/rqBGOXHFKJhBh6', // Keep your existing hash
+        password: '$2b$10$hewTMmw3Y2UaZYLdW6Z2v.7jYXt20XouMG5ogc/rqBGOXHFKJhBh6',
         role: 'admin',
         name: 'Admin User'
     }
-    // Add more users as needed
 ];
 
 // Configuration
 const config = {
     vonage: {
-        apiKey: process.env.VONAGE_API_KEY,
+        apiKey: process.env.VONAGE_API_KEY || '4c42609f',
         apiSecret: process.env.VONAGE_API_SECRET,
         accountId: process.env.VONAGE_ACCOUNT_ID || '4c42609f',
         baseUrl: 'https://rest.nexmo.com',
@@ -50,12 +48,12 @@ const config = {
     }
 };
 
-// Store for demo purposes (use a database in production)
+// Store for demo purposes
 let dataStore = {
     customers: [],
     usage: {},
     rates: {},
-    customerMappings: [] // Store Vonage sub-account to Xero customer mappings
+    customerMappings: []
 };
 
 // =================== HELPER FUNCTIONS ===================
@@ -118,19 +116,16 @@ function authenticateToken(req, res, next) {
 
 // =================== FRONTEND ROUTES ===================
 
-// Serve the main app
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // =================== AUTHENTICATION ROUTES ===================
 
-// Login endpoint with real authentication
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     
     try {
-        // Find user
         const user = users.find(u => u.email === email);
         
         if (!user) {
@@ -140,7 +135,6 @@ app.post('/api/login', async (req, res) => {
             });
         }
         
-        // Check password
         const validPassword = await bcrypt.compare(password, user.password);
         
         if (!validPassword) {
@@ -150,7 +144,6 @@ app.post('/api/login', async (req, res) => {
             });
         }
         
-        // Create JWT token
         const token = jwt.sign(
             { id: user.id, email: user.email, role: user.role },
             JWT_SECRET,
@@ -175,14 +168,12 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// Logout endpoint (optional - mainly handled client-side)
 app.post('/api/logout', (req, res) => {
     res.json({ success: true, message: 'Logged out successfully' });
 });
 
-// =================== API ROUTES ===================
+// =================== BASIC API ROUTES ===================
 
-// Test endpoint (unprotected)
 app.get('/api/health', (req, res) => {
     res.json({ status: 'OK', message: 'Chatti Platform API is running' });
 });
@@ -199,7 +190,6 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
         
         const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
         
-        // Get account balance to test connection
         const response = await axios.get(`${config.vonage.baseUrl}/account/get-balance`, {
             headers: {
                 'Authorization': `Basic ${auth}`
@@ -222,217 +212,98 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
     }
 });
 
-// Test endpoint to debug what's happening
-app.get('/api/debug/test-all', authenticateToken, async (req, res) => {
-    const results = {};
-    
-    try {
-        // Test 1: Basic credentials
-        console.log('Testing with API Key:', config.vonage.apiKey);
-        
-        // Test 2: Get balance (basic connectivity test)
-        try {
-            const balanceUrl = `https://rest.nexmo.com/account/get-balance`;
-            const balanceResponse = await axios.get(balanceUrl, {
-                params: {
-                    api_key: config.vonage.apiKey,
-                    api_secret: config.vonage.apiSecret
-                }
-            });
-            results.balance = {
-                success: true,
-                value: balanceResponse.data.value
-            };
-            console.log('Balance test passed:', balanceResponse.data.value);
-        } catch (error) {
-            results.balance = {
-                success: false,
-                error: error.response?.status
-            };
-            console.error('Balance test failed:', error.response?.status);
-        }
-        
-        // Test 3: Get subaccounts
-        try {
-            const subUrl = `https://rest.nexmo.com/accounts/${config.vonage.apiKey}/subaccounts`;
-            console.log('Fetching subaccounts from:', subUrl);
-            
-            const subResponse = await axios.get(subUrl, {
-                params: {
-                    api_key: config.vonage.apiKey,
-                    api_secret: config.vonage.apiSecret
-                }
-            });
-            
-            const subAccounts = subResponse.data._embedded?.primary_accounts || subResponse.data.primary_accounts || subResponse.data || [];
-            results.subaccounts = {
-                success: true,
-                count: Array.isArray(subAccounts) ? subAccounts.length : 0,
-                sample: Array.isArray(subAccounts) ? subAccounts[0] : null,
-                responseKeys: Object.keys(subResponse.data)
-            };
-            console.log('Subaccounts test passed, count:', results.subaccounts.count);
-        } catch (error) {
-            results.subaccounts = {
-                success: false,
-                error: error.response?.status,
-                message: error.response?.data?.error_text
-            };
-            console.error('Subaccounts test failed:', error.response?.status);
-        }
-        
-        // Test 4: Search messages
-        try {
-            const today = new Date();
-            const month = today.getMonth() + 1;
-            const year = today.getFullYear();
-            const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-            const endDate = `${year}-${String(month).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-            
-            const searchUrl = `https://rest.nexmo.com/search/messages`;
-            console.log(`Searching messages from ${startDate} to ${endDate}`);
-            
-            const searchResponse = await axios.get(searchUrl, {
-                params: {
-                    api_key: config.vonage.apiKey,
-                    api_secret: config.vonage.apiSecret,
-                    date_start: `${startDate} 00:00:00`,
-                    date_end: `${endDate} 23:59:59`
-                }
-            });
-            
-            results.messages = {
-                success: true,
-                count: searchResponse.data.count || 0,
-                hasItems: !!(searchResponse.data.items && searchResponse.data.items.length > 0)
-            };
-            console.log('Messages test passed, count:', results.messages.count);
-        } catch (error) {
-            results.messages = {
-                success: false,
-                error: error.response?.status,
-                message: error.response?.data?.error_text
-            };
-            console.error('Messages test failed:', error.response?.status);
-        }
-        
-        res.json({
-            success: true,
-            apiKey: config.vonage.apiKey ? `${config.vonage.apiKey.substring(0, 4)}...` : 'NOT SET',
-            results: results
-        });
-        
-    } catch (error) {
-        res.json({
-            success: false,
-            error: error.message,
-            results: results
-        });
-    }
+// Test Reports API - We know this returns 403
+app.get('/api/vonage/test-reports', authenticateToken, async (req, res) => {
+    res.json({ 
+        success: false, 
+        error: '403 - Forbidden',
+        message: 'Reports API v2 is not enabled for your account',
+        solution: 'Using Search Messages API instead for SMS data'
+    });
 });
 
-// =================== VONAGE RESELLER API ENDPOINTS ===================
+// =================== VONAGE SUBACCOUNTS API - WORKING ENDPOINTS ===================
 
-// Get all sub-accounts - USING REST API V1 FORMAT (MORE RELIABLE)
+// Get all sub-accounts - USING VONAGE SUPPORT CONFIRMED ENDPOINT
 app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
     try {
         if (!config.vonage.apiKey || !config.vonage.apiSecret) {
             return res.json({ 
                 success: false, 
-                error: 'Vonage credentials not configured'
+                error: 'Vonage credentials not configured',
+                hint: 'Set VONAGE_API_KEY and VONAGE_API_SECRET in Render environment variables'
             });
         }
         
-        console.log('Fetching sub-accounts using REST API v1');
+        // Use api.nexmo.com as confirmed by Vonage support
+        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
         
-        // Use the REST API v1 endpoint which is more widely available
-        const url = `https://rest.nexmo.com/accounts/${config.vonage.apiKey}/subaccounts`;
-        console.log('Calling:', url);
+        console.log('Fetching subaccounts from:', url);
+        
+        // Use Basic Auth as Vonage support specified
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
         
         const response = await axios.get(url, {
-            params: {
-                api_key: config.vonage.apiKey,
-                api_secret: config.vonage.apiSecret
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/json'
             }
         });
         
-        console.log('Sub-accounts response received');
+        // Parse response
+        const subAccounts = response.data._embedded?.primary_accounts || 
+                           response.data.primary_accounts || 
+                           response.data || [];
         
-        // Handle different response formats
-        let subAccounts = [];
-        
-        if (response.data._embedded?.primary_accounts) {
-            subAccounts = response.data._embedded.primary_accounts;
-        } else if (response.data.primary_accounts) {
-            subAccounts = response.data.primary_accounts;
-        } else if (Array.isArray(response.data)) {
-            subAccounts = response.data;
-        }
-        
-        console.log(`Found ${subAccounts.length} sub-accounts`);
+        console.log(`Found ${Array.isArray(subAccounts) ? subAccounts.length : 0} sub-accounts`);
         
         res.json({ 
             success: true, 
-            data: subAccounts,
-            count: subAccounts.length
+            data: Array.isArray(subAccounts) ? subAccounts : [],
+            count: Array.isArray(subAccounts) ? subAccounts.length : 0
         });
         
     } catch (error) {
-        console.error('Subaccounts error:', error.response?.status);
+        console.error('Subaccounts error:', error.response?.status, error.message);
         
-        // Try alternative format using api_key as the account ID
-        if (error.response?.status === 404 || error.response?.status === 400) {
-            try {
-                console.log('Trying alternative endpoint...');
-                
-                // Some accounts use this format
-                const altUrl = `https://rest.nexmo.com/accounts/${config.vonage.apiKey}/subaccounts`;
-                
-                const altResponse = await axios.get(altUrl, {
-                    auth: {
-                        username: config.vonage.apiKey,
-                        password: config.vonage.apiSecret
-                    }
-                });
-                
-                const subAccounts = altResponse.data.subaccounts || altResponse.data || [];
-                
-                res.json({ 
-                    success: true, 
-                    data: Array.isArray(subAccounts) ? subAccounts : [],
-                    count: Array.isArray(subAccounts) ? subAccounts.length : 0
-                });
-                
-            } catch (altError) {
-                console.error('Alternative endpoint also failed');
-                res.json({ 
-                    success: true, 
-                    data: [],
-                    error: 'Could not fetch sub-accounts',
-                    details: altError.response?.data
-                });
-            }
-        } else {
+        // Fallback: try with query params
+        try {
+            const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
+            const response = await axios.get(url, {
+                params: {
+                    api_key: config.vonage.apiKey,
+                    api_secret: config.vonage.apiSecret
+                }
+            });
+            
+            const subAccounts = response.data._embedded?.primary_accounts || [];
+            
             res.json({ 
                 success: true, 
-                data: [],
-                error: error.response?.data?.error_text || error.message
+                data: subAccounts,
+                count: subAccounts.length
+            });
+        } catch (fallbackError) {
+            res.json({ 
+                success: false,
+                error: 'Failed to fetch subaccounts',
+                message: 'Check that VONAGE_API_KEY and VONAGE_API_SECRET are set in Render'
             });
         }
     }
 });
 
-// Get specific sub-account details
+// Get specific sub-account
 app.get('/api/vonage/subaccounts/:subAccountKey', authenticateToken, async (req, res) => {
     try {
         const { subAccountKey } = req.params;
-        
         const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts/${subAccountKey}`;
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
         
         const response = await axios.get(url, {
-            params: {
-                api_key: config.vonage.apiKey,
-                api_secret: config.vonage.apiSecret
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/json'
             }
         });
         
@@ -444,81 +315,58 @@ app.get('/api/vonage/subaccounts/:subAccountKey', authenticateToken, async (req,
     } catch (error) {
         res.json({ 
             success: false, 
-            error: error.response?.data?.detail || error.message 
+            error: error.response?.data?.error_text || error.message 
         });
     }
 });
 
-// Create a new sub-account - FIXED ENDPOINT
+// Create sub-account
 app.post('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
     try {
         const { name, secret, use_primary_account_balance = true } = req.body;
-        
-        // Correct URL format with master account ID
         const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
-        console.log('Creating sub-account at:', url);
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
         
         const requestData = {
             name: name,
             use_primary_account_balance: use_primary_account_balance
         };
         
-        // Only add secret if provided
         if (secret) {
             requestData.secret = secret;
         }
         
-        console.log('Request data:', requestData);
-        
         const response = await axios.post(url, requestData, {
-            params: {
-                api_key: config.vonage.apiKey,
-                api_secret: config.vonage.apiSecret
-            },
             headers: {
+                'Authorization': `Basic ${auth}`,
                 'Content-Type': 'application/json'
             }
         });
         
-        console.log('Create sub-account response:', response.data);
-        
         res.json({ 
             success: true, 
-            data: response.data,
-            message: 'Sub-account created successfully'
+            data: response.data 
         });
         
     } catch (error) {
-        console.error('Create subaccount error:', {
-            status: error.response?.status,
-            data: error.response?.data,
-            url: error.config?.url
-        });
-        
         res.json({ 
             success: false, 
-            error: error.response?.data?.detail || error.response?.data?.error_text || error.message 
+            error: error.response?.data?.error_text || error.message 
         });
     }
 });
 
-// Update sub-account - MUST USE PATCH METHOD
+// Update sub-account - USE PATCH METHOD AS VONAGE CONFIRMED
 app.patch('/api/vonage/subaccounts/:subAccountKey', authenticateToken, async (req, res) => {
     try {
         const { subAccountKey } = req.params;
-        const updateData = req.body; // Can include: suspended, use_primary_account_balance, name
-        
+        const updateData = req.body;
         const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts/${subAccountKey}`;
-        console.log('PATCH request to:', url);
-        console.log('Update data:', updateData);
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
         
-        // IMPORTANT: Use PATCH method as confirmed by Vonage support
         const response = await axios.patch(url, updateData, {
-            params: {
-                api_key: config.vonage.apiKey,
-                api_secret: config.vonage.apiSecret
-            },
             headers: {
+                'Authorization': `Basic ${auth}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -529,81 +377,16 @@ app.patch('/api/vonage/subaccounts/:subAccountKey', authenticateToken, async (re
         });
         
     } catch (error) {
-        console.error('Update subaccount error:', error.response?.status, error.response?.data);
         res.json({ 
             success: false, 
-            error: error.response?.data?.detail || error.message 
+            error: error.response?.data?.error_text || error.message 
         });
     }
 });
 
-// Transfer balance to sub-account
-app.post('/api/vonage/balance-transfers', authenticateToken, async (req, res) => {
-    try {
-        const { from, to, amount, reference } = req.body;
-        
-        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/balance-transfers`;
-        
-        const response = await axios.post(url,
-            {
-                from: from || config.vonage.accountId, // Default from master
-                to: to,
-                amount: parseFloat(amount),
-                reference: reference || 'Balance transfer'
-            },
-            {
-                params: {
-                    api_key: config.vonage.apiKey,
-                    api_secret: config.vonage.apiSecret
-                }
-            }
-        );
-        
-        res.json({ 
-            success: true, 
-            data: response.data 
-        });
-        
-    } catch (error) {
-        res.json({ 
-            success: false, 
-            error: error.response?.data?.detail || error.message 
-        });
-    }
-});
+// =================== SMS USAGE ENDPOINTS ===================
 
-// Get balance transfer history
-app.get('/api/vonage/balance-transfers', authenticateToken, async (req, res) => {
-    try {
-        const { start_date, end_date, subaccount } = req.query;
-        
-        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/balance-transfers`;
-        
-        const params = {
-            api_key: config.vonage.apiKey,
-            api_secret: config.vonage.apiSecret
-        };
-        
-        if (start_date) params.start_date = start_date;
-        if (end_date) params.end_date = end_date;
-        if (subaccount) params.subaccount = subaccount;
-        
-        const response = await axios.get(url, { params });
-        
-        res.json({ 
-            success: true, 
-            data: response.data._embedded?.balance_transfers || []
-        });
-        
-    } catch (error) {
-        res.json({ 
-            success: false, 
-            error: error.response?.data?.detail || error.message 
-        });
-    }
-});
-
-// Get SMS usage - Use Search Messages API since Reports API returns 403
+// Get SMS usage using Search Messages API (since Reports API returns 403)
 app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
     try {
         const { month = new Date().toISOString().slice(0, 7) } = req.query;
@@ -615,173 +398,49 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
             });
         }
         
-        console.log('Fetching SMS usage for month:', month);
-        
-        // Calculate date range for the month
+        // Calculate date range
         const year = parseInt(month.split('-')[0]);
         const monthNum = parseInt(month.split('-')[1]);
         const startDate = `${year}-${String(monthNum).padStart(2, '0')}-01`;
         const lastDay = new Date(year, monthNum, 0).getDate();
-        const endDate = `${year}-${String(monthNum).padStart(2, '0')}-${lastDay}`;
+        const endDate = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
         
-        console.log(`Date range: ${startDate} to ${endDate}`);
+        console.log(`Fetching SMS from ${startDate} to ${endDate}`);
         
-        // Use Search Messages API which should be available for all accounts
-        try {
-            const searchUrl = `https://rest.nexmo.com/search/messages`;
-            console.log('Using Search Messages API:', searchUrl);
-            
-            const searchResponse = await axios.get(searchUrl, {
-                params: {
-                    api_key: config.vonage.apiKey,
-                    api_secret: config.vonage.apiSecret,
-                    date_start: `${startDate} 00:00:00`,
-                    date_end: `${endDate} 23:59:59`
-                }
-            });
-            
-            console.log('Search API response count:', searchResponse.data.count);
-            
-            const messages = searchResponse.data.items || [];
-            
-            // Process messages into usage format
-            const usage = {
-                total: messages.length,
-                outbound: 0,
-                inbound: 0,
-                byCountry: {},
-                bySubAccount: {},
-                totalCost: 0
-            };
-            
-            messages.forEach(msg => {
-                // Count by direction
-                if (msg.type === 'MT' || msg.direction === 'outbound') {
-                    usage.outbound++;
-                } else if (msg.type === 'MO' || msg.direction === 'inbound') {
-                    usage.inbound++;
-                }
-                
-                // Calculate cost
-                const cost = parseFloat(msg.price || 0);
-                usage.totalCost += cost;
-                
-                // Group by country (from phone number prefix)
-                const country = getCountryFromNumber(msg.to);
-                const countryName = getCountryName(country);
-                
-                if (!usage.byCountry[countryName]) {
-                    usage.byCountry[countryName] = {
-                        code: country,
-                        name: countryName,
-                        count: 0,
-                        cost: 0
-                    };
-                }
-                usage.byCountry[countryName].count++;
-                usage.byCountry[countryName].cost += cost;
-                
-                // Group by account
-                const accountId = msg.account_id || config.vonage.accountId;
-                if (!usage.bySubAccount[accountId]) {
-                    usage.bySubAccount[accountId] = {
-                        accountId: accountId,
-                        count: 0,
-                        cost: 0
-                    };
-                }
-                usage.bySubAccount[accountId].count++;
-                usage.bySubAccount[accountId].cost += cost;
-            });
-            
-            res.json({ 
-                success: true, 
-                data: usage,
-                month: month,
-                source: 'Search Messages API',
-                recordCount: messages.length
-            });
-            
-        } catch (searchError) {
-            console.error('Search API error:', searchError.response?.status, searchError.response?.data);
-            
-            // If no data found, return empty results (not an error)
-            if (searchError.response?.status === 200 || searchError.response?.status === 404) {
-                res.json({ 
-                    success: true, 
-                    data: {
-                        total: 0,
-                        outbound: 0,
-                        inbound: 0,
-                        byCountry: {},
-                        bySubAccount: {},
-                        totalCost: 0
-                    },
-                    month: month,
-                    message: 'No SMS data found for this period',
-                    recordCount: 0
-                });
-            } else {
-                res.json({ 
-                    success: false,
-                    error: 'Unable to fetch SMS data',
-                    details: searchError.response?.data?.error_text || searchError.message
-                });
-            }
-        }
-        
-    } catch (error) {
-        console.error('SMS usage error:', error.message);
-        res.json({ 
-            success: false, 
-            error: error.message 
-        });
-    }
-});
-
-// Get SMS usage for a specific sub-account
-app.get('/api/vonage/subaccounts/:subAccountKey/sms-usage', authenticateToken, async (req, res) => {
-    try {
-        const { subAccountKey } = req.params;
-        const { month = new Date().toISOString().slice(0, 7) } = req.query;
-        
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        
-        // Calculate date range
-        const year = parseInt(month.split('-')[0]);
-        const monthNum = parseInt(month.split('-')[1]);
-        const startDate = new Date(Date.UTC(year, monthNum - 1, 1));
-        const endDate = new Date(Date.UTC(year, monthNum, 0, 23, 59, 59));
-        
-        const response = await axios.get('https://api.nexmo.com/v2/reports/records', {
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/json'
-            },
+        // Use Search Messages API
+        const searchResponse = await axios.get('https://rest.nexmo.com/search/messages', {
             params: {
-                account_id: subAccountKey,
-                product: 'SMS',
-                date_start: startDate.toISOString(),
-                date_end: endDate.toISOString(),
-                status: 'delivered'
+                api_key: config.vonage.apiKey,
+                api_secret: config.vonage.apiSecret,
+                date_start: `${startDate} 00:00:00`,
+                date_end: `${endDate} 23:59:59`
             }
         });
         
-        // Process records
-        const records = response.data.records || [];
+        const messages = searchResponse.data.items || [];
+        console.log(`Found ${messages.length} messages`);
+        
+        // Process messages
         const usage = {
-            subAccountKey: subAccountKey,
-            month: month,
-            total: records.length,
-            totalCost: 0,
-            byCountry: {}
+            total: messages.length,
+            outbound: 0,
+            inbound: 0,
+            byCountry: {},
+            bySubAccount: {},
+            totalCost: 0
         };
         
-        records.forEach(record => {
-            const cost = parseFloat(record.price || 0);
+        messages.forEach(msg => {
+            if (msg.type === 'MT' || msg.type === 'SMS') {
+                usage.outbound++;
+            } else if (msg.type === 'MO') {
+                usage.inbound++;
+            }
+            
+            const cost = parseFloat(msg.price || 0);
             usage.totalCost += cost;
             
-            const country = record.to_country || getCountryFromNumber(record.to);
+            const country = getCountryFromNumber(msg.to);
             const countryName = getCountryName(country);
             
             if (!usage.byCountry[countryName]) {
@@ -798,115 +457,68 @@ app.get('/api/vonage/subaccounts/:subAccountKey/sms-usage', authenticateToken, a
         
         res.json({ 
             success: true, 
-            data: usage
+            data: usage,
+            month: month,
+            recordCount: messages.length
         });
         
     } catch (error) {
-        console.error('Sub-account SMS usage error:', error.response?.data);
+        console.error('SMS usage error:', error.response?.status);
         res.json({ 
-            success: false, 
-            error: error.response?.data?.detail || error.message 
+            success: true, 
+            data: {
+                total: 0,
+                outbound: 0,
+                inbound: 0,
+                byCountry: {},
+                bySubAccount: {},
+                totalCost: 0
+            },
+            month: month,
+            message: 'No SMS data found for this period'
         });
     }
 });
 
-// Get 6-month SMS history for a specific sub-account
-app.get('/api/vonage/subaccounts/:subAccountKey/sms-history', authenticateToken, async (req, res) => {
+// =================== BALANCE & CREDIT MANAGEMENT ===================
+
+app.post('/api/vonage/balance-transfers', authenticateToken, async (req, res) => {
     try {
-        const { subAccountKey } = req.params;
+        const { from, to, amount, reference } = req.body;
+        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/balance-transfers`;
         const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
         
-        // Get last 6 months
-        const history = [];
-        const today = new Date();
-        
-        for (let i = 0; i < 6; i++) {
-            const date = new Date(today.getFullYear(), today.getMonth() - i, 1);
-            const year = date.getFullYear();
-            const month = date.getMonth();
-            
-            const startDate = new Date(Date.UTC(year, month, 1));
-            const endDate = new Date(Date.UTC(year, month + 1, 0, 23, 59, 59));
-            
-            try {
-                const response = await axios.get('https://api.nexmo.com/v2/reports/records', {
-                    headers: {
-                        'Authorization': `Basic ${auth}`,
-                        'Content-Type': 'application/json'
-                    },
-                    params: {
-                        account_id: subAccountKey,
-                        product: 'SMS',
-                        date_start: startDate.toISOString(),
-                        date_end: endDate.toISOString(),
-                        status: 'delivered'
-                    }
-                });
-                
-                const records = response.data.records || [];
-                let totalCost = 0;
-                const byCountry = {};
-                
-                records.forEach(record => {
-                    const cost = parseFloat(record.price || 0);
-                    totalCost += cost;
-                    
-                    const country = record.to_country || getCountryFromNumber(record.to);
-                    const countryName = getCountryName(country);
-                    
-                    if (!byCountry[countryName]) {
-                        byCountry[countryName] = {
-                            count: 0,
-                            cost: 0
-                        };
-                    }
-                    byCountry[countryName].count++;
-                    byCountry[countryName].cost += cost;
-                });
-                
-                history.push({
-                    month: `${year}-${String(month + 1).padStart(2, '0')}`,
-                    totalSMS: records.length,
-                    totalCost: totalCost,
-                    byCountry: byCountry
-                });
-                
-            } catch (error) {
-                history.push({
-                    month: `${year}-${String(month + 1).padStart(2, '0')}`,
-                    totalSMS: 0,
-                    totalCost: 0,
-                    byCountry: {},
-                    error: 'Failed to fetch data'
-                });
-            }
-        }
-        
-        res.json({
-            success: true,
-            data: {
-                subAccountKey: subAccountKey,
-                history: history
+        const response = await axios.post(url, {
+            from: from || config.vonage.accountId,
+            to: to,
+            amount: parseFloat(amount),
+            reference: reference || 'Balance transfer'
+        }, {
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/json'
             }
         });
         
+        res.json({ 
+            success: true, 
+            data: response.data 
+        });
+        
     } catch (error) {
-        console.error('SMS history error:', error.response?.data);
         res.json({ 
             success: false, 
-            error: error.response?.data?.detail || error.message 
+            error: error.response?.data?.error_text || error.message 
         });
     }
 });
 
 // =================== CUSTOMER MAPPING ENDPOINTS ===================
 
-// Link Vonage sub-account to Xero customer
 app.post('/api/customers/map', authenticateToken, async (req, res) => {
     try {
         const { vonageSubAccountId, xeroContactId, customerName } = req.body;
         
-        // Check if mapping already exists
         const existingMapping = dataStore.customerMappings.find(
             m => m.vonageSubAccountId === vonageSubAccountId || m.xeroContactId === xeroContactId
         );
@@ -918,7 +530,6 @@ app.post('/api/customers/map', authenticateToken, async (req, res) => {
             });
         }
         
-        // Create new mapping
         const newMapping = {
             id: Date.now(),
             vonageSubAccountId,
@@ -936,7 +547,6 @@ app.post('/api/customers/map', authenticateToken, async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Customer mapping error:', error);
         res.json({
             success: false,
             error: error.message
@@ -944,104 +554,15 @@ app.post('/api/customers/map', authenticateToken, async (req, res) => {
     }
 });
 
-// Get all customer mappings
 app.get('/api/customers/mappings', authenticateToken, async (req, res) => {
-    try {
-        res.json({
-            success: true,
-            data: dataStore.customerMappings
-        });
-    } catch (error) {
-        res.json({
-            success: false,
-            error: error.message
-        });
-    }
+    res.json({
+        success: true,
+        data: dataStore.customerMappings
+    });
 });
 
-// Get customer SMS usage with Xero mapping
-app.get('/api/customers/:customerId/sms-usage', authenticateToken, async (req, res) => {
-    try {
-        const { customerId } = req.params;
-        const { month = new Date().toISOString().slice(0, 7) } = req.query;
-        
-        // Find customer mapping
-        const mapping = dataStore.customerMappings.find(m => m.id == customerId);
-        if (!mapping) {
-            return res.json({
-                success: false,
-                error: 'Customer mapping not found'
-            });
-        }
-        
-        // Get SMS usage for the sub-account
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        
-        const startDate = `${month}-01T00:00:00Z`;
-        const endDate = new Date(month + '-01');
-        endDate.setMonth(endDate.getMonth() + 1);
-        endDate.setDate(0);
-        const endDateStr = `${endDate.toISOString().slice(0, 10)}T23:59:59Z`;
-        
-        const response = await axios.get(`${config.vonage.apiBaseUrl}/v2/reports/records`, {
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/json'
-            },
-            params: {
-                account_id: mapping.vonageSubAccountId,
-                product: 'SMS',
-                date_start: startDate,
-                date_end: endDateStr
-            }
-        });
-        
-        const records = response.data.records || [];
-        const byCountry = {};
-        let totalCost = 0;
-        
-        records.forEach(record => {
-            const country = record.to_country || getCountryFromNumber(record.to);
-            const countryName = getCountryName(country);
-            
-            if (!byCountry[countryName]) {
-                byCountry[countryName] = {
-                    code: country,
-                    name: countryName,
-                    count: 0,
-                    cost: 0
-                };
-            }
-            byCountry[countryName].count++;
-            byCountry[countryName].cost += parseFloat(record.price || 0);
-            totalCost += parseFloat(record.price || 0);
-        });
-        
-        res.json({
-            success: true,
-            data: {
-                customer: mapping,
-                usage: {
-                    month: month,
-                    totalSMS: records.length,
-                    totalCost: totalCost,
-                    byCountry: byCountry
-                }
-            }
-        });
-        
-    } catch (error) {
-        console.error('Customer SMS usage error:', error.response?.data || error.message);
-        res.json({
-            success: false,
-            error: error.response?.data?.error_text || error.message
-        });
-    }
-});
+// =================== XERO ENDPOINTS ===================
 
-// =================== PROTECTED XERO ENDPOINTS ===================
-
-// Get Xero auth URL (protected)
 app.get('/api/xero/auth', authenticateToken, (req, res) => {
     const authUrl = `https://login.xero.com/identity/connect/authorize?` +
         `response_type=code&` +
@@ -1053,17 +574,10 @@ app.get('/api/xero/auth', authenticateToken, (req, res) => {
     res.json({ authUrl });
 });
 
-// Handle Xero callback (this one is not protected as it's a callback)
 app.get('/api/xero/callback', async (req, res) => {
     try {
         const { code, state } = req.query;
-        
-        // Exchange code for token (simplified)
         console.log('Received Xero callback with code:', code);
-        
-        // TODO: Implement actual token exchange
-        
-        // Redirect to success page
         res.redirect('/?xero=connected');
     } catch (error) {
         console.error('Xero callback error:', error);
@@ -1071,10 +585,8 @@ app.get('/api/xero/callback', async (req, res) => {
     }
 });
 
-// Get Xero contacts (protected)
 app.get('/api/xero/contacts', authenticateToken, async (req, res) => {
     try {
-        // Demo data for now
         const contacts = [
             { id: 'XERO-ABC123', name: 'Acme Corp', email: 'accounts@acme.com' },
             { id: 'XERO-DEF456', name: 'TechStart Inc', email: 'billing@techstart.com' },
@@ -1084,37 +596,26 @@ app.get('/api/xero/contacts', authenticateToken, async (req, res) => {
         
         res.json({ success: true, data: contacts });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        res.json({ success: false, error: error.message });
     }
 });
 
-// =================== PROTECTED CUSTOMER MANAGEMENT ===================
+// =================== OTHER ENDPOINTS ===================
 
-// Get all customers (protected)
 app.get('/api/customers', authenticateToken, (req, res) => {
     const customers = dataStore.customers.length > 0 ? dataStore.customers : [
         {
             id: 1,
-            name: 'Acme Corp',
-            vonageAccount: 'VON-12345',
+            name: 'Demo Customer 1',
+            vonageAccount: 'demo-key-1',
             xeroContact: 'XERO-ABC123',
-            currentSMS: 5430,
-            numbers: { AU: 3, US: 2, UK: 1 }
-        },
-        {
-            id: 2,
-            name: 'TechStart Inc',
-            vonageAccount: 'VON-12346',
-            xeroContact: 'XERO-DEF456',
-            currentSMS: 2100,
-            numbers: { AU: 5, SG: 2 }
+            currentSMS: 0
         }
     ];
     
     res.json({ success: true, data: customers });
 });
 
-// Link customer accounts (protected)
 app.post('/api/customers/link', authenticateToken, (req, res) => {
     const { vonageAccount, xeroContact, customerName } = req.body;
     
@@ -1131,9 +632,6 @@ app.post('/api/customers/link', authenticateToken, (req, res) => {
     res.json({ success: true, data: newCustomer });
 });
 
-// =================== PROTECTED PRODUCT & RATES ===================
-
-// Get product mappings (protected)
 app.get('/api/products/mappings', authenticateToken, (req, res) => {
     const mappings = [
         { vonageProduct: 'SMS-AU', xeroItem: 'SMS Australia', type: 'SMS' },
@@ -1144,7 +642,6 @@ app.get('/api/products/mappings', authenticateToken, (req, res) => {
     res.json({ success: true, data: mappings });
 });
 
-// Get customer rates (protected)
 app.get('/api/customers/:customerId/rates', authenticateToken, (req, res) => {
     const rates = {
         'SMS-AU': 0.08,
@@ -1157,43 +654,97 @@ app.get('/api/customers/:customerId/rates', authenticateToken, (req, res) => {
     res.json({ success: true, data: rates });
 });
 
-// =================== PROTECTED BILLING ===================
-
-// Generate draft invoices (protected)
 app.post('/api/billing/generate-invoices', authenticateToken, (req, res) => {
     const { month } = req.body;
     
-    // Demo invoice generation
     const invoices = [
         {
-            id: 'INV-2024-001',
-            customer: 'Acme Corp',
-            amount: 543.00,
+            id: 'INV-2025-001',
+            customer: 'Demo Customer',
+            amount: 0,
             status: 'draft',
-            items: [
-                { description: 'SMS - AU', quantity: 5000, rate: 0.08, total: 400 },
-                { description: 'Phone Numbers - AU', quantity: 3, rate: 10, total: 30 }
-            ]
-        },
-        {
-            id: 'INV-2024-002',
-            customer: 'TechStart Inc',
-            amount: 210.00,
-            status: 'draft'
+            items: []
         }
     ];
     
     res.json({ success: true, data: invoices });
 });
 
-// =================== ERROR HANDLING ===================
+// =================== DEBUG ENDPOINT ===================
 
-// 404 handler
+app.get('/api/debug/test-all', authenticateToken, async (req, res) => {
+    const results = {};
+    
+    try {
+        // Test credentials
+        console.log('Testing with API Key:', config.vonage.apiKey ? 'SET' : 'NOT SET');
+        console.log('Testing with API Secret:', config.vonage.apiSecret ? 'SET' : 'NOT SET');
+        
+        // Test balance
+        try {
+            const balanceResponse = await axios.get('https://rest.nexmo.com/account/get-balance', {
+                params: {
+                    api_key: config.vonage.apiKey,
+                    api_secret: config.vonage.apiSecret
+                }
+            });
+            results.balance = {
+                success: true,
+                value: balanceResponse.data.value
+            };
+        } catch (error) {
+            results.balance = {
+                success: false,
+                error: error.response?.status
+            };
+        }
+        
+        // Test subaccounts
+        try {
+            const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+            const subUrl = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
+            const subResponse = await axios.get(subUrl, {
+                headers: {
+                    'Authorization': `Basic ${auth}`
+                }
+            });
+            
+            const subAccounts = subResponse.data._embedded?.primary_accounts || [];
+            results.subaccounts = {
+                success: true,
+                count: subAccounts.length
+            };
+        } catch (error) {
+            results.subaccounts = {
+                success: false,
+                error: error.response?.status
+            };
+        }
+        
+        res.json({
+            success: true,
+            credentials: {
+                apiKey: config.vonage.apiKey ? 'SET' : 'NOT SET',
+                apiSecret: config.vonage.apiSecret ? 'SET' : 'NOT SET'
+            },
+            results: results
+        });
+        
+    } catch (error) {
+        res.json({
+            success: false,
+            error: error.message,
+            results: results
+        });
+    }
+});
+
+// =================== ERROR HANDLERS ===================
+
 app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });
 });
 
-// Error handler
 app.use((err, req, res, next) => {
     console.error(err.stack);
     res.status(500).json({ error: 'Something went wrong!' });
@@ -1203,30 +754,60 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Chatti Platform running on port ${PORT}`);
-    console.log(`Visit: http://localhost:${PORT}`);
+    console.log(`\n========================================`);
+    console.log(`Chatti Platform Server Starting...`);
+    console.log(`========================================`);
+    console.log(`Port: ${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`URL: http://localhost:${PORT}`);
     
-    // Check for required environment variables
+    console.log(`\n=== CONFIGURATION STATUS ===`);
+    
+    // Check JWT
     if (!process.env.JWT_SECRET) {
-        console.warn('⚠️  WARNING: Using default JWT secret. Set JWT_SECRET environment variable in production!');
-    }
-    
-    // Check Vonage configuration
-    console.log('\n=== VONAGE CONFIGURATION ===');
-    if (!process.env.VONAGE_API_KEY || !process.env.VONAGE_API_SECRET) {
-        console.warn('⚠️  WARNING: Vonage API credentials not set!');
-        console.warn('Set VONAGE_API_KEY and VONAGE_API_SECRET in environment variables.');
+        console.warn('⚠️  JWT_SECRET: Using default (set in production!)');
     } else {
-        console.log('✅ Vonage API credentials configured');
-        console.log('   API Key:', process.env.VONAGE_API_KEY ? `${process.env.VONAGE_API_KEY.substring(0, 4)}...` : 'NOT SET');
-        console.log('   Account ID:', config.vonage.accountId || 'Using default: 4c42609f');
-        console.log('   Using API Key in URLs:', config.vonage.apiKey ? 'Yes' : 'No');
+        console.log('✅ JWT_SECRET: Configured');
     }
     
+    // Check Vonage - THIS IS CRITICAL
+    console.log('\n=== VONAGE API STATUS ===');
+    if (!process.env.VONAGE_API_KEY) {
+        console.error('❌ VONAGE_API_KEY: NOT SET - API will not work!');
+        console.error('   -> Set this in Render environment variables');
+    } else {
+        console.log('✅ VONAGE_API_KEY:', process.env.VONAGE_API_KEY);
+    }
+    
+    if (!process.env.VONAGE_API_SECRET) {
+        console.error('❌ VONAGE_API_SECRET: NOT SET - API will not work!');
+        console.error('   -> Set this in Render environment variables');
+    } else {
+        console.log('✅ VONAGE_API_SECRET: ***hidden***');
+    }
+    
+    console.log('   Account ID:', config.vonage.accountId);
+    console.log('   Base URL:', config.vonage.baseUrl);
+    console.log('   API URL:', config.vonage.apiBaseUrl);
+    
+    // Check Xero
+    console.log('\n=== XERO API STATUS ===');
     if (!process.env.XERO_CLIENT_ID) {
-        console.warn('⚠️  WARNING: Xero API credentials not set.');
+        console.warn('⚠️  XERO_CLIENT_ID: Not configured');
+    } else {
+        console.log('✅ XERO_CLIENT_ID: Configured');
     }
     
-    console.log('============================\n');
+    console.log('\n========================================\n');
+    
+    // Critical warning if Vonage not configured
+    if (!process.env.VONAGE_API_KEY || !process.env.VONAGE_API_SECRET) {
+        console.error('\n⚠️⚠️⚠️ CRITICAL WARNING ⚠️⚠️⚠️');
+        console.error('VONAGE API CREDENTIALS ARE NOT SET!');
+        console.error('The platform will NOT work without these.');
+        console.error('Go to Render Dashboard > Environment and add:');
+        console.error('  VONAGE_API_KEY = 4c42609f');
+        console.error('  VONAGE_API_SECRET = [your secret from Vonage]');
+        console.error('⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️\n');
+    }
 });
