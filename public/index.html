@@ -3,341 +3,1223 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chatti Communications Platform</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <title>Chatti Platform - Telecommunications Management</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        * { font-family: 'Inter', sans-serif; }
-        .loader {
-            border: 3px solid #f3f4f6;
-            border-top: 3px solid #3b82f6;
-            border-radius: 50%;
-            width: 32px;
-            height: 32px;
-            animation: spin 1s linear infinite;
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
         }
-        .admin-section { display: none; }
+        
+        .login-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        
+        .login-box {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            width: 400px;
+        }
+        
+        .login-box h1 {
+            margin-bottom: 30px;
+            color: #333;
+            text-align: center;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .login-btn {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .login-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .error-message, .success-message {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        
+        .error-message {
+            background: #fee;
+            color: #c33;
+            border: 1px solid #fcc;
+        }
+        
+        .success-message {
+            background: #efe;
+            color: #3c3;
+            border: 1px solid #cfc;
+        }
+        
+        .app-container {
+            display: none;
+            background: white;
+            min-height: 100vh;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header h1 {
+            font-size: 24px;
+        }
+        
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .logout-btn {
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        
+        .logout-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        
+        .nav-tabs {
+            background: #f8f9fa;
+            padding: 0 30px;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            gap: 30px;
+        }
+        
+        .nav-tab {
+            padding: 15px 0;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            color: #6c757d;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        
+        .nav-tab:hover {
+            color: #495057;
+        }
+        
+        .nav-tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: white;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            transition: box-shadow 0.3s;
+        }
+        
+        .stat-card:hover {
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .stat-label {
+            color: #6c757d;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        
+        .stat-value {
+            font-size: 28px;
+            font-weight: bold;
+            color: #495057;
+        }
+        
+        .stat-change {
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        
+        .stat-change.positive {
+            color: #28a745;
+        }
+        
+        .stat-change.negative {
+            color: #dc3545;
+        }
+        
+        .section {
+            background: white;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: #495057;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5a67d8;
+        }
+        
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #218838;
+        }
+        
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .table th {
+            background: #f8f9fa;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #495057;
+            border-bottom: 2px solid #dee2e6;
+        }
+        
+        .table td {
+            padding: 12px;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        .table tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .badge-success {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .badge-warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .badge-danger {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+        }
+        
+        .loading::after {
+            content: '...';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+        
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #6c757d;
+        }
+        
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .modal.active {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 500px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .modal-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+        
+        .modal-close {
+            font-size: 24px;
+            cursor: pointer;
+            color: #6c757d;
+            border: none;
+            background: none;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        .chart-container {
+            height: 300px;
+            margin-top: 20px;
+        }
+        
+        select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background: white;
+        }
+        
+        .filter-bar {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+        
+        .filter-bar select {
+            width: auto;
+            min-width: 150px;
+        }
     </style>
 </head>
-<body class="bg-gray-50">
+<body>
     <!-- Login Screen -->
-    <div id="loginScreen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-600 to-blue-800">
-        <div class="bg-white p-8 rounded-lg shadow-2xl w-96">
-            <div class="text-center mb-6">
-                <h1 class="text-2xl font-bold text-gray-800">Chatti Communications</h1>
-                <p class="text-gray-600 mt-2">Platform Login</p>
+    <div class="login-container" id="loginScreen">
+        <div class="login-box">
+            <h1>🌐 Chatti Platform</h1>
+            <p style="text-align: center; color: #6c757d; margin-bottom: 30px;">
+                Telecommunications Management System
+            </p>
+            <div id="loginMessage"></div>
+            <form id="loginForm">
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" value="admin@chatti.com" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" required>
+                </div>
+                <button type="submit" class="login-btn">Sign In</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main Application -->
+    <div class="app-container" id="appScreen">
+        <header class="header">
+            <h1>📡 Chatti Platform</h1>
+            <div class="user-info">
+                <span id="userEmail"></span>
+                <button class="logout-btn" onclick="logout()">Logout</button>
             </div>
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                    <input type="email" id="loginEmail" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500" placeholder="admin@chatti.com">
+        </header>
+
+        <nav class="nav-tabs">
+            <div class="nav-tab active" onclick="switchTab('dashboard')">Dashboard</div>
+            <div class="nav-tab" onclick="switchTab('customers')">Customers</div>
+            <div class="nav-tab" onclick="switchTab('vonage')">Vonage Accounts</div>
+            <div class="nav-tab" onclick="switchTab('xero')">Xero Integration</div>
+            <div class="nav-tab" onclick="switchTab('billing')">Billing</div>
+            <div class="nav-tab" onclick="switchTab('settings')">Settings</div>
+        </nav>
+
+        <div class="content">
+            <!-- Dashboard Tab -->
+            <div id="dashboard-tab" class="tab-content active">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Total SMS (Current Month)</div>
+                        <div class="stat-value" id="totalSMS">0</div>
+                        <div class="stat-change positive">Loading...</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Active Customers</div>
+                        <div class="stat-value" id="activeCustomers">0</div>
+                        <div class="stat-change">Loading...</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Phone Numbers</div>
+                        <div class="stat-value" id="totalNumbers">0</div>
+                        <div class="stat-change">Loading...</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Monthly Revenue</div>
+                        <div class="stat-value" id="monthlyRevenue">$0</div>
+                        <div class="stat-change positive">Loading...</div>
+                    </div>
                 </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                    <input type="password" id="loginPassword" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500" placeholder="••••••••">
+
+                <div class="section">
+                    <div class="section-title">
+                        SMS Usage by Country (Current Month)
+                        <button class="btn btn-primary" onclick="refreshSMSUsage()">Refresh</button>
+                    </div>
+                    <div id="smsUsageContent">
+                        <div class="loading">Loading SMS usage data</div>
+                    </div>
                 </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Login As</label>
-                    <select id="loginRole" class="w-full px-3 py-2 border rounded-lg">
-                        <option value="admin">Admin</option>
-                        <option value="customer">Customer</option>
+
+                <div class="section">
+                    <div class="section-title">Recent Activity</div>
+                    <div id="recentActivity">
+                        <div class="loading">Loading recent activity</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Customers Tab -->
+            <div id="customers-tab" class="tab-content">
+                <div class="section">
+                    <div class="section-title">
+                        Customer Management
+                        <button class="btn btn-primary" onclick="showLinkCustomerModal()">+ Link Customer</button>
+                    </div>
+                    <div class="filter-bar">
+                        <select id="customerFilter">
+                            <option value="all">All Customers</option>
+                            <option value="active">Active</option>
+                            <option value="suspended">Suspended</option>
+                        </select>
+                        <input type="text" placeholder="Search customers..." id="customerSearch" style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 5px;">
+                    </div>
+                    <div id="customersContent">
+                        <div class="loading">Loading customers</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Vonage Tab -->
+            <div id="vonage-tab" class="tab-content">
+                <div class="section">
+                    <div class="section-title">
+                        Vonage Sub-Accounts
+                        <button class="btn btn-primary" onclick="createSubAccount()">+ Create Sub-Account</button>
+                    </div>
+                    <div id="vonageContent">
+                        <div class="loading">Loading Vonage accounts</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Xero Tab -->
+            <div id="xero-tab" class="tab-content">
+                <div class="section">
+                    <div class="section-title">
+                        Xero Integration
+                        <button class="btn btn-primary" onclick="connectXero()">Connect to Xero</button>
+                    </div>
+                    <div id="xeroContent">
+                        <div class="loading">Loading Xero data</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Billing Tab -->
+            <div id="billing-tab" class="tab-content">
+                <div class="section">
+                    <div class="section-title">
+                        Billing & Invoices
+                        <button class="btn btn-success" onclick="generateInvoices()">Generate Monthly Invoices</button>
+                    </div>
+                    <div id="billingContent">
+                        <div class="loading">Loading billing information</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div id="settings-tab" class="tab-content">
+                <div class="section">
+                    <div class="section-title">Platform Settings</div>
+                    <div id="settingsContent">
+                        <div class="form-group">
+                            <label>Vonage API Status</label>
+                            <div id="vonageStatus">
+                                <span class="badge badge-warning">Checking...</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Xero API Status</label>
+                            <div id="xeroStatus">
+                                <span class="badge badge-warning">Checking...</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Reports API Status</label>
+                            <div id="reportsStatus">
+                                <span class="badge badge-warning">Checking...</span>
+                            </div>
+                        </div>
+                        <button class="btn btn-primary" onclick="testConnections()">Test All Connections</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Link Customer Modal -->
+    <div id="linkCustomerModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Link Customer Accounts</h3>
+                <button class="modal-close" onclick="closeLinkCustomerModal()">&times;</button>
+            </div>
+            <form id="linkCustomerForm">
+                <div class="form-group">
+                    <label>Customer Name</label>
+                    <input type="text" id="linkCustomerName" required>
+                </div>
+                <div class="form-group">
+                    <label>Vonage Sub-Account</label>
+                    <select id="linkVonageAccount" required>
+                        <option value="">Select sub-account...</option>
                     </select>
                 </div>
-                <button onclick="login()" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700">
-                    Sign In
-                </button>
-                <div class="text-center text-xs text-gray-500 mt-4">
-                    Demo: admin@chatti.com / password123
+                <div class="form-group">
+                    <label>Xero Contact</label>
+                    <select id="linkXeroContact" required>
+                        <option value="">Select Xero contact...</option>
+                    </select>
                 </div>
-            </div>
+                <button type="submit" class="btn btn-primary">Link Accounts</button>
+            </form>
         </div>
     </div>
 
-    <!-- Admin Dashboard -->
-    <div id="adminDashboard" class="hidden">
-        <!-- Navigation -->
-        <nav class="bg-white shadow-sm border-b">
-            <div class="px-6 py-3 flex justify-between items-center">
-                <div class="flex items-center space-x-8">
-                    <h1 class="text-xl font-semibold">Chatti Admin</h1>
-                    <div class="flex space-x-6">
-                        <button onclick="showAdminSection('overview')" class="text-gray-700 hover:text-blue-600">Overview</button>
-                        <button onclick="showAdminSection('customers')" class="text-gray-700 hover:text-blue-600">Customers</button>
-                        <button onclick="showAdminSection('products')" class="text-gray-700 hover:text-blue-600">Products & Rates</button>
-                        <button onclick="showAdminSection('billing')" class="text-gray-700 hover:text-blue-600">Billing</button>
-                        <button onclick="showAdminSection('settings')" class="text-gray-700 hover:text-blue-600">Settings</button>
-                    </div>
-                </div>
-                <button onclick="logout()" class="text-gray-500 hover:text-gray-700">
-                    <i class="fas fa-sign-out-alt mr-2"></i>Logout
-                </button>
-            </div>
-        </nav>
+    <script>
+        // Global variables
+        let authToken = localStorage.getItem('authToken');
+        let currentUser = null;
 
-        <!-- Admin Content -->
-        <div class="p-6">
-            <!-- Overview Section -->
-            <div id="admin-overview" class="admin-section" style="display: block;">
-                <h2 class="text-2xl font-bold mb-6">SMS Usage Overview</h2>
-                
-                <!-- Current Month Stats -->
-                <div class="grid grid-cols-4 gap-4 mb-6">
-                    <div class="bg-white p-4 rounded-lg shadow">
-                        <div class="text-sm text-gray-600">Total SMS (Month)</div>
-                        <div class="text-2xl font-bold text-blue-600" id="totalSMSMonth">0</div>
-                        <div class="text-xs text-gray-500">All customers</div>
-                    </div>
-                    <div class="bg-white p-4 rounded-lg shadow">
-                        <div class="text-sm text-gray-600">Inbound SMS</div>
-                        <div class="text-2xl font-bold text-green-600" id="inboundSMS">0</div>
-                    </div>
-                    <div class="bg-white p-4 rounded-lg shadow">
-                        <div class="text-sm text-gray-600">Outbound SMS</div>
-                        <div class="text-2xl font-bold text-purple-600" id="outboundSMS">0</div>
-                    </div>
-                    <div class="bg-white p-4 rounded-lg shadow">
-                        <div class="text-sm text-gray-600">Active Customers</div>
-                        <div class="text-2xl font-bold" id="activeCustomers">0</div>
-                    </div>
-                </div>
+        // Check if user is already logged in
+        if (authToken) {
+            validateToken();
+        }
 
-                <!-- SMS by Country -->
-                <div class="bg-white rounded-lg shadow p-4 mb-6">
-                    <h3 class="font-semibold mb-3">SMS Usage by Country (Current Month)</h3>
-                    <table class="w-full">
-                        <thead class="bg-gray-50">
-                            <tr>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Country</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Inbound</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Outbound</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
-                            </tr>
-                        </thead>
-                        <tbody id="countryUsageTable">
-                            <tr>
-                                <td colspan="4" class="px-4 py-2 text-center text-gray-500">Loading...</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
+        // API Helper with automatic authentication
+        async function apiCall(url, options = {}) {
+            const defaultOptions = {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${authToken}`
+                }
+            };
 
-                <!-- Month Selector -->
-                <div class="bg-white rounded-lg shadow p-4">
-                    <div class="flex items-center justify-between mb-3">
-                        <h3 class="font-semibold">Historical Data</h3>
-                        <input type="month" id="monthSelector" class="px-3 py-1 border rounded" onchange="loadMonthData()">
-                    </div>
-                    <div id="historicalData" class="text-gray-500 text-center py-4">
-                        Select a month to view historical data
-                    </div>
-                </div>
-            </div>
-
-            <!-- Customers Section -->
-            <div id="admin-customers" class="admin-section">
-                <h2 class="text-2xl font-bold mb-6">Customer Management</h2>
-                
-                <!-- Customer List -->
-                <div class="bg-white rounded-lg shadow">
-                    <div class="p-4 border-b">
-                        <div class="flex justify-between items-center">
-                            <input type="text" placeholder="Search customers..." class="px-3 py-2 border rounded-lg w-64">
-                            <button onclick="showLinkCustomerModal()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
-                                <i class="fas fa-link mr-2"></i>Link Account
-                            </button>
-                        </div>
-                    </div>
-                    <table class="w-full">
-                        <thead class="bg-gray-50">
-                            <tr>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Vonage Account</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Xero Contact</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">SMS (Month)</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Numbers</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="customerTable">
-                            <tr>
-                                <td colspan="6" class="px-4 py-2 text-center text-gray-500">Loading customers...</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Products & Rates Section -->
-            <div id="admin-products" class="admin-section">
-                <h2 class="text-2xl font-bold mb-6">Products & Rates</h2>
-                
-                <div class="grid grid-cols-2 gap-6">
-                    <!-- Product Mapping -->
-                    <div class="bg-white rounded-lg shadow p-4">
-                        <h3 class="font-semibold mb-3">Product Mapping</h3>
-                        <button onclick="showAddProductModal()" class="bg-green-600 text-white px-3 py-1 rounded text-sm mb-3 hover:bg-green-700">
-                            <i class="fas fa-plus mr-1"></i>Add Mapping
-                        </button>
-                        <table class="w-full text-sm">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th class="px-2 py-1 text-left">Vonage Product</th>
-                                    <th class="px-2 py-1 text-left">Xero Item</th>
-                                    <th class="px-2 py-1 text-left">Type</th>
-                                </tr>
-                            </thead>
-                            <tbody id="productMappingTable">
-                                <tr>
-                                    <td class="px-2 py-1">SMS-AU</td>
-                                    <td class="px-2 py-1">SMS Australia</td>
-                                    <td class="px-2 py-1">SMS</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <!-- Customer Rates -->
-                    <div class="bg-white rounded-lg shadow p-4">
-                        <h3 class="font-semibold mb-3">Customer Rates</h3>
-                        <select class="w-full px-3 py-1 border rounded mb-3">
-                            <option>Select Customer</option>
-                        </select>
-                        <table class="w-full text-sm">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th class="px-2 py-1 text-left">Product</th>
-                                    <th class="px-2 py-1 text-left">Rate</th>
-                                    <th class="px-2 py-1 text-left">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="customerRatesTable">
-                                <tr>
-                                    <td colspan="3" class="px-2 py-1 text-center text-gray-500">Select a customer</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Billing Section -->
-            <div id="admin-billing" class="admin-section">
-                <h2 class="text-2xl font-bold mb-6">Billing & Invoicing</h2>
-                
-                <div class="bg-white rounded-lg shadow p-4">
-                    <div class="flex justify-between items-center mb-4">
-                        <h3 class="font-semibold">Draft Invoices</h3>
-                        <button onclick="generateDraftInvoices()" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700">
-                            <i class="fas fa-file-invoice mr-2"></i>Generate Draft Invoices
-                        </button>
-                    </div>
-                    <div id="draftInvoicesTable" class="text-gray-500 text-center py-8">
-                        No draft invoices generated yet
-                    </div>
-                </div>
-            </div>
-
-            <!-- Settings Section -->
-            <div id="admin-settings" class="admin-section">
-                <h2 class="text-2xl font-bold mb-6">API Settings</h2>
-                
-                <div class="grid grid-cols-2 gap-6">
-                    <!-- Vonage API -->
-                    <div class="bg-white rounded-lg shadow p-4">
-                        <h3 class="font-semibold mb-3">Vonage API Configuration</h3>
-                        <div class="space-y-3">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">API Key</label>
-                                <input type="password" id="vonageApiKey" class="w-full px-3 py-2 border rounded-lg" placeholder="Enter API Key">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">API Secret</label>
-                                <input type="password" id="vonageApiSecret" class="w-full px-3 py-2 border rounded-lg" placeholder="Enter API Secret">
-                            </div>
-                            <button onclick="saveVonageSettings()" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Save Settings</button>
-                        </div>
-                    </div>
-
-                    <!-- Xero API -->
-                    <div class="bg-white rounded-lg shadow p-4">
-                        <h3 class="font-semibold mb-3">Xero API Configuration</h3>
-                        <div class="space-y-3">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Client ID</label>
-                                <input type="password" id="xeroClientId" class="w-full px-3 py-2 border rounded-lg" placeholder="Enter Client ID">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Client Secret</label>
-                                <input type="password" id="xeroClientSecret" class="w-full px-3 py-2 border rounded-lg" placeholder="Enter Client Secret">
-                            </div>
-                            <button onclick="connectXero()" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Connect to Xero</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Customer Dashboard -->
-    <div id="customerDashboard" class="hidden">
-        <!-- Navigation -->
-        <nav class="bg-white shadow-sm border-b">
-            <div class="px-6 py-3 flex justify-between items-center">
-                <h1 class="text-xl font-semibold">Chatti Customer Portal</h1>
-                <button onclick="logout()" class="text-gray-500 hover:text-gray-700">
-                    <i class="fas fa-sign-out-alt mr-2"></i>Logout
-                </button>
-            </div>
-        </nav>
-
-        <!-- Customer Content -->
-        <div class="p-6 max-w-6xl mx-auto">
-            <h2 class="text-2xl font-bold mb-6">Your SMS Usage</h2>
+            const response = await fetch(url, { ...defaultOptions, ...options });
             
-            <!-- Current Month Stats -->
-            <div class="grid grid-cols-3 gap-4 mb-6">
-                <div class="bg-white p-4 rounded-lg shadow">
-                    <div class="text-sm text-gray-600">Current Month SMS</div>
-                    <div class="text-2xl font-bold text-blue-600" id="customerCurrentSMS">0</div>
-                    <div class="text-xs text-gray-500">Total messages</div>
-                </div>
-                <div class="bg-white p-4 rounded-lg shadow">
-                    <div class="text-sm text-gray-600">Previous Month SMS</div>
-                    <div class="text-2xl font-bold text-gray-600" id="customerPreviousSMS">0</div>
-                </div>
-                <div class="bg-white p-4 rounded-lg shadow">
-                    <div class="text-sm text-gray-600">Trend</div>
-                    <div class="text-2xl font-bold text-green-600" id="customerTrend">+0%</div>
-                </div>
-            </div>
+            if (response.status === 401 || response.status === 403) {
+                // Token expired or invalid
+                localStorage.removeItem('authToken');
+                showLogin();
+                throw new Error('Authentication failed');
+            }
+            
+            return response.json();
+        }
 
-            <!-- Usage Details -->
-            <div class="bg-white rounded-lg shadow p-4">
-                <h3 class="font-semibold mb-3">Usage Breakdown</h3>
-                <table class="w-full">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th class="px-4 py-2 text-left">Month</th>
-                            <th class="px-4 py-2 text-left">Inbound SMS</th>
-                            <th class="px-4 py-2 text-left">Outbound SMS</th>
-                            <th class="px-4 py-2 text-left">Total</th>
-                        </tr>
-                    </thead>
-                    <tbody id="customerUsageTable">
-                        <tr>
-                            <td colspan="4" class="px-4 py-2 text-center text-gray-500">Loading...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
+        // Login functionality
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    authToken = data.token;
+                    currentUser = data.user;
+                    localStorage.setItem('authToken', authToken);
+                    showApp();
+                    loadDashboard();
+                } else {
+                    showLoginMessage('error', data.message || 'Login failed');
+                }
+            } catch (error) {
+                showLoginMessage('error', 'Connection error. Please try again.');
+            }
+        });
 
-    <script src="app.js"></script>
+        // Validate stored token
+        async function validateToken() {
+            try {
+                const data = await apiCall('/api/vonage/test');
+                if (data.success) {
+                    showApp();
+                    loadDashboard();
+                } else {
+                    localStorage.removeItem('authToken');
+                    showLogin();
+                }
+            } catch (error) {
+                localStorage.removeItem('authToken');
+                showLogin();
+            }
+        }
+
+        function showLoginMessage(type, message) {
+            const messageDiv = document.getElementById('loginMessage');
+            messageDiv.className = type === 'error' ? 'error-message' : 'success-message';
+            messageDiv.textContent = message;
+            setTimeout(() => messageDiv.textContent = '', 5000);
+        }
+
+        function showLogin() {
+            document.getElementById('loginScreen').style.display = 'flex';
+            document.getElementById('appScreen').style.display = 'none';
+        }
+
+        function showApp() {
+            document.getElementById('loginScreen').style.display = 'none';
+            document.getElementById('appScreen').style.display = 'block';
+            if (currentUser) {
+                document.getElementById('userEmail').textContent = currentUser.email;
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('authToken');
+            authToken = null;
+            currentUser = null;
+            showLogin();
+        }
+
+        // Tab switching
+        function switchTab(tabName) {
+            // Update nav tabs
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            
+            // Update content
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+            
+            // Load tab data
+            switch(tabName) {
+                case 'dashboard':
+                    loadDashboard();
+                    break;
+                case 'customers':
+                    loadCustomers();
+                    break;
+                case 'vonage':
+                    loadVonageAccounts();
+                    break;
+                case 'xero':
+                    loadXeroData();
+                    break;
+                case 'billing':
+                    loadBillingData();
+                    break;
+                case 'settings':
+                    testConnections();
+                    break;
+            }
+        }
+
+        // Load Dashboard with automatic authentication
+        async function loadDashboard() {
+            try {
+                // Load SMS usage
+                await refreshSMSUsage();
+                
+                // Load sub-accounts for stats
+                const subAccounts = await apiCall('/api/vonage/subaccounts');
+                if (subAccounts.success && subAccounts.data) {
+                    document.getElementById('activeCustomers').textContent = subAccounts.data.length;
+                }
+                
+                // Load recent activity (placeholder)
+                document.getElementById('recentActivity').innerHTML = `
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Account</th>
+                                <th>Activity</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>2 mins ago</td>
+                                <td>Acme Corp</td>
+                                <td>SMS sent to +61 4XX XXX XXX</td>
+                                <td><span class="badge badge-success">Delivered</span></td>
+                            </tr>
+                            <tr>
+                                <td>15 mins ago</td>
+                                <td>TechStart Inc</td>
+                                <td>Number provisioned: +61 2 XXXX XXXX</td>
+                                <td><span class="badge badge-success">Active</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                `;
+            } catch (error) {
+                console.error('Dashboard load error:', error);
+            }
+        }
+
+        // Refresh SMS Usage with automatic authentication
+        async function refreshSMSUsage() {
+            const container = document.getElementById('smsUsageContent');
+            container.innerHTML = '<div class="loading">Loading SMS usage data</div>';
+            
+            try {
+                const currentMonth = new Date().toISOString().slice(0, 7);
+                const data = await apiCall(`/api/vonage/usage/sms?month=${currentMonth}`);
+                
+                if (data.success) {
+                    document.getElementById('totalSMS').textContent = data.data.total || '0';
+                    
+                    if (data.data.byCountry && Object.keys(data.data.byCountry).length > 0) {
+                        let html = '<table class="table"><thead><tr><th>Country</th><th>SMS Count</th><th>Cost</th></tr></thead><tbody>';
+                        
+                        for (const [country, info] of Object.entries(data.data.byCountry)) {
+                            html += `
+                                <tr>
+                                    <td>${country}</td>
+                                    <td>${info.count}</td>
+                                    <td>$${(info.cost || 0).toFixed(2)}</td>
+                                </tr>
+                            `;
+                        }
+                        
+                        html += '</tbody></table>';
+                        container.innerHTML = html;
+                    } else if (data.data.bySubAccount && Object.keys(data.data.bySubAccount).length > 0) {
+                        // Show by sub-account if no country data
+                        let html = '<table class="table"><thead><tr><th>Account</th><th>SMS Count</th><th>Cost</th></tr></thead><tbody>';
+                        
+                        for (const [account, info] of Object.entries(data.data.bySubAccount)) {
+                            html += `
+                                <tr>
+                                    <td>${account}</td>
+                                    <td>${info.count}</td>
+                                    <td>$${(info.cost || 0).toFixed(2)}</td>
+                                </tr>
+                            `;
+                        }
+                        
+                        html += '</tbody></table>';
+                        container.innerHTML = html;
+                    } else {
+                        container.innerHTML = '<div class="empty-state">No SMS usage data for current month</div>';
+                    }
+                } else {
+                    container.innerHTML = `
+                        <div class="error-message">
+                            ${data.error || 'Failed to load SMS usage'}
+                            ${data.instructions ? `<br><small>${data.instructions}</small>` : ''}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                container.innerHTML = '<div class="error-message">Failed to load SMS usage data</div>';
+            }
+        }
+
+        // Load Customers with automatic authentication
+        async function loadCustomers() {
+            const container = document.getElementById('customersContent');
+            container.innerHTML = '<div class="loading">Loading customers</div>';
+            
+            try {
+                // First get mappings
+                const mappings = await apiCall('/api/customers/mappings');
+                
+                // Then get sub-accounts
+                const subAccounts = await apiCall('/api/vonage/subaccounts');
+                
+                if (mappings.success && mappings.data.length > 0) {
+                    let html = '<table class="table"><thead><tr><th>Customer</th><th>Vonage Account</th><th>Xero Contact</th><th>Actions</th></tr></thead><tbody>';
+                    
+                    for (const mapping of mappings.data) {
+                        html += `
+                            <tr>
+                                <td>${mapping.customerName}</td>
+                                <td>${mapping.vonageSubAccountId}</td>
+                                <td>${mapping.xeroContactId}</td>
+                                <td>
+                                    <button class="btn btn-primary" onclick="viewCustomerUsage('${mapping.id}')">View Usage</button>
+                                </td>
+                            </tr>
+                        `;
+                    }
+                    
+                    html += '</tbody></table>';
+                    container.innerHTML = html;
+                } else if (subAccounts.success && subAccounts.data) {
+                    // Show sub-accounts if no mappings yet
+                    let html = '<p>No customer mappings yet. Here are your Vonage sub-accounts:</p>';
+                    html += '<table class="table"><thead><tr><th>Account ID</th><th>Name</th><th>Balance</th><th>Status</th></tr></thead><tbody>';
+                    
+                    for (const account of subAccounts.data) {
+                        html += `
+                            <tr>
+                                <td>${account.api_key}</td>
+                                <td>${account.name || 'N/A'}</td>
+                                <td>$${(account.balance || 0).toFixed(2)}</td>
+                                <td>${account.suspended ? '<span class="badge badge-danger">Suspended</span>' : '<span class="badge badge-success">Active</span>'}</td>
+                            </tr>
+                        `;
+                    }
+                    
+                    html += '</tbody></table>';
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state">No customers found. Click "Link Customer" to get started.</div>';
+                }
+            } catch (error) {
+                container.innerHTML = '<div class="error-message">Failed to load customers</div>';
+            }
+        }
+
+        // Load Vonage Accounts with automatic authentication
+        async function loadVonageAccounts() {
+            const container = document.getElementById('vonageContent');
+            container.innerHTML = '<div class="loading">Loading Vonage accounts</div>';
+            
+            try {
+                const data = await apiCall('/api/vonage/subaccounts');
+                
+                if (data.success && data.data && data.data.length > 0) {
+                    let html = '<table class="table"><thead><tr><th>API Key</th><th>Name</th><th>Balance</th><th>Credit Limit</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+                    
+                    for (const account of data.data) {
+                        html += `
+                            <tr>
+                                <td>${account.api_key}</td>
+                                <td>${account.name || 'N/A'}</td>
+                                <td>$${(account.balance || 0).toFixed(2)}</td>
+                                <td>$${(account.credit_limit || 0).toFixed(2)}</td>
+                                <td>${account.suspended ? '<span class="badge badge-danger">Suspended</span>' : '<span class="badge badge-success">Active</span>'}</td>
+                                <td>
+                                    <button class="btn btn-primary" onclick="viewSubAccountUsage('${account.api_key}')">View Usage</button>
+                                </td>
+                            </tr>
+                        `;
+                    }
+                    
+                    html += '</tbody></table>';
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state">No sub-accounts found</div>';
+                }
+            } catch (error) {
+                container.innerHTML = '<div class="error-message">Failed to load Vonage accounts</div>';
+            }
+        }
+
+        // Load Xero Data with automatic authentication
+        async function loadXeroData() {
+            const container = document.getElementById('xeroContent');
+            container.innerHTML = '<div class="loading">Loading Xero data</div>';
+            
+            try {
+                const data = await apiCall('/api/xero/contacts');
+                
+                if (data.success && data.data) {
+                    let html = '<table class="table"><thead><tr><th>Contact ID</th><th>Name</th><th>Email</th><th>Status</th></tr></thead><tbody>';
+                    
+                    for (const contact of data.data) {
+                        html += `
+                            <tr>
+                                <td>${contact.id}</td>
+                                <td>${contact.name}</td>
+                                <td>${contact.email}</td>
+                                <td><span class="badge badge-success">Active</span></td>
+                            </tr>
+                        `;
+                    }
+                    
+                    html += '</tbody></table>';
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state">No Xero contacts found. Connect to Xero to sync contacts.</div>';
+                }
+            } catch (error) {
+                container.innerHTML = '<div class="error-message">Failed to load Xero data</div>';
+            }
+        }
+
+        // Load Billing Data with automatic authentication
+        async function loadBillingData() {
+            const container = document.getElementById('billingContent');
+            container.innerHTML = '<div class="loading">Loading billing information</div>';
+            
+            try {
+                const currentMonth = new Date().toISOString().slice(0, 7);
+                const data = await apiCall('/api/billing/generate-invoices', {
+                    method: 'POST',
+                    body: JSON.stringify({ month: currentMonth })
+                });
+                
+                if (data.success && data.data) {
+                    let html = '<table class="table"><thead><tr><th>Invoice #</th><th>Customer</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+                    
+                    for (const invoice of data.data) {
+                        html += `
+                            <tr>
+                                <td>${invoice.id}</td>
+                                <td>${invoice.customer}</td>
+                                <td>$${invoice.amount.toFixed(2)}</td>
+                                <td><span class="badge badge-warning">${invoice.status}</span></td>
+                                <td>
+                                    <button class="btn btn-primary">View</button>
+                                    <button class="btn btn-success">Send to Xero</button>
+                                </td>
+                            </tr>
+                        `;
+                    }
+                    
+                    html += '</tbody></table>';
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="empty-state">No invoices generated yet</div>';
+                }
+            } catch (error) {
+                container.innerHTML = '<div class="error-message">Failed to load billing data</div>';
+            }
+        }
+
+        // Test all connections with automatic authentication
+        async function testConnections() {
+            // Test Vonage
+            try {
+                const vonageTest = await apiCall('/api/vonage/test');
+                const vonageStatus = document.getElementById('vonageStatus');
+                if (vonageTest.success) {
+                    vonageStatus.innerHTML = '<span class="badge badge-success">Connected</span> Balance: $' + vonageTest.balance;
+                } else {
+                    vonageStatus.innerHTML = '<span class="badge badge-danger">Not Connected</span>';
+                }
+            } catch (error) {
+                document.getElementById('vonageStatus').innerHTML = '<span class="badge badge-danger">Error</span>';
+            }
+            
+            // Test Reports API
+            try {
+                const reportsTest = await apiCall('/api/vonage/test-reports');
+                const reportsStatus = document.getElementById('reportsStatus');
+                if (reportsTest.success) {
+                    reportsStatus.innerHTML = '<span class="badge badge-success">Available</span>';
+                } else {
+                    reportsStatus.innerHTML = `<span class="badge badge-danger">Not Available</span> ${reportsTest.solution || ''}`;
+                }
+            } catch (error) {
+                document.getElementById('reportsStatus').innerHTML = '<span class="badge badge-danger">Error</span>';
+            }
+            
+            // Test Xero
+            try {
+                const xeroTest = await apiCall('/api/xero/contacts');
+                const xeroStatus = document.getElementById('xeroStatus');
+                if (xeroTest.success) {
+                    xeroStatus.innerHTML = '<span class="badge badge-success">Connected</span>';
+                } else {
+                    xeroStatus.innerHTML = '<span class="badge badge-warning">Not Connected</span>';
+                }
+            } catch (error) {
+                document.getElementById('xeroStatus').innerHTML = '<span class="badge badge-warning">Not Connected</span>';
+            }
+        }
+
+        // View sub-account usage
+        async function viewSubAccountUsage(subAccountId) {
+            try {
+                const data = await apiCall(`/api/vonage/subaccounts/${subAccountId}/sms-usage`);
+                if (data.success) {
+                    alert(`SMS Usage for ${subAccountId}:\nTotal SMS: ${data.data.totalSMS}\nTotal Cost: $${data.data.totalCost.toFixed(2)}`);
+                }
+            } catch (error) {
+                alert('Failed to load usage data');
+            }
+        }
+
+        // View customer usage
+        async function viewCustomerUsage(customerId) {
+            try {
+                const data = await apiCall(`/api/customers/${customerId}/sms-usage`);
+                if (data.success) {
+                    alert(`SMS Usage for ${data.data.customer.customerName}:\nTotal SMS: ${data.data.usage.totalSMS}\nTotal Cost: $${data.data.usage.totalCost.toFixed(2)}`);
+                }
+            } catch (error) {
+                alert('Failed to load customer usage');
+            }
+        }
+
+        // Show link customer modal
+        async function showLinkCustomerModal() {
+            document.getElementById('linkCustomerModal').classList.add('active');
+            
+            // Load Vonage accounts
+            try {
+                const vonageData = await apiCall('/api/vonage/subaccounts');
+                const vonageSelect = document.getElementById('linkVonageAccount');
+                vonageSelect.innerHTML = '<option value="">Select sub-account...</option>';
+                
+                if (vonageData.success && vonageData.data) {
+                    vonageData.data.forEach(account => {
+                        vonageSelect.innerHTML += `<option value="${account.api_key}">${account.name || account.api_key}</option>`;
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load Vonage accounts');
+            }
+            
+            // Load Xero contacts
+            try {
+                const xeroData = await apiCall('/api/xero/contacts');
+                const xeroSelect = document.getElementById('linkXeroContact');
+                xeroSelect.innerHTML = '<option value="">Select Xero contact...</option>';
+                
+                if (xeroData.success && xeroData.data) {
+                    xeroData.data.forEach(contact => {
+                        xeroSelect.innerHTML += `<option value="${contact.id}">${contact.name}</option>`;
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load Xero contacts');
+            }
+        }
+
+        function closeLinkCustomerModal() {
+            document.getElementById('linkCustomerModal').classList.remove('active');
+        }
+
+        // Handle link customer form
+        document.getElementById('linkCustomerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const customerName = document.getElementById('linkCustomerName').value;
+            const vonageAccount = document.getElementById('linkVonageAccount').value;
+            const xeroContact = document.getElementById('linkXeroContact').value;
+            
+            try {
+                const response = await apiCall('/api/customers/map', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        customerName: customerName,
+                        vonageSubAccountId: vonageAccount,
+                        xeroContactId: xeroContact
+                    })
+                });
+                
+                if (response.success) {
+                    alert('Customer linked successfully!');
+                    closeLinkCustomerModal();
+                    loadCustomers();
+                } else {
+                    alert('Failed to link customer: ' + response.error);
+                }
+            } catch (error) {
+                alert('Error linking customer');
+            }
+        });
+
+        // Generate invoices
+        async function generateInvoices() {
+            if (confirm('Generate invoices for the current month?')) {
+                try {
+                    const currentMonth = new Date().toISOString().slice(0, 7);
+                    const response = await apiCall('/api/billing/generate-invoices', {
+                        method: 'POST',
+                        body: JSON.stringify({ month: currentMonth })
+                    });
+                    
+                    if (response.success) {
+                        alert('Invoices generated successfully!');
+                        loadBillingData();
+                    }
+                } catch (error) {
+                    alert('Failed to generate invoices');
+                }
+            }
+        }
+
+        // Connect to Xero
+        async function connectXero() {
+            try {
+                const response = await apiCall('/api/xero/auth');
+                if (response.authUrl) {
+                    window.open(response.authUrl, '_blank');
+                }
+            } catch (error) {
+                alert('Failed to connect to Xero');
+            }
+        }
+
+        // Create sub-account
+        async function createSubAccount() {
+            const name = prompt('Enter sub-account name:');
+            if (name) {
+                try {
+                    const response = await apiCall('/api/vonage/subaccounts/create', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            name: name,
+                            use_primary_account_balance: true
+                        })
+                    });
+                    
+                    if (response.success) {
+                        alert('Sub-account created successfully!');
+                        loadVonageAccounts();
+                    } else {
+                        alert('Failed to create sub-account: ' + response.error);
+                    }
+                } catch (error) {
+                    alert('Error creating sub-account');
+                }
+            }
+        }
+    </script>
 </body>
 </html>
