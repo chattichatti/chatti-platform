@@ -327,7 +327,7 @@ app.get('/api/vonage/diagnostic', authenticateToken, async (req, res) => {
 
 // =================== VONAGE RESELLER API ENDPOINTS ===================
 
-// Get all sub-accounts under your master account - WITH BETTER ERROR HANDLING
+// Get all sub-accounts - USING REST API V1 FORMAT (MORE RELIABLE)
 app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
     try {
         if (!config.vonage.apiKey || !config.vonage.apiSecret) {
@@ -337,11 +337,10 @@ app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
             });
         }
         
-        console.log('Fetching sub-accounts for master account:', config.vonage.accountId);
-        console.log('Using API key:', config.vonage.apiKey);
+        console.log('Fetching sub-accounts using REST API v1');
         
-        // Use the CORRECT endpoint format confirmed by Vonage support
-        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
+        // Use the REST API v1 endpoint which is more widely available
+        const url = `https://rest.nexmo.com/accounts/${config.vonage.apiKey}/subaccounts`;
         console.log('Calling:', url);
         
         const response = await axios.get(url, {
@@ -351,79 +350,67 @@ app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
             }
         });
         
-        console.log('Sub-accounts response:', response.data);
+        console.log('Sub-accounts response received');
         
-        // The response should contain _embedded.primary_accounts array
-        const subAccounts = response.data._embedded?.primary_accounts || response.data.primary_accounts || [];
+        // Handle different response formats
+        let subAccounts = [];
         
-        // If no sub-accounts, that's OK - you might not have created any yet
-        if (subAccounts.length === 0) {
-            console.log('No sub-accounts found - you may need to create some');
+        if (response.data._embedded?.primary_accounts) {
+            subAccounts = response.data._embedded.primary_accounts;
+        } else if (response.data.primary_accounts) {
+            subAccounts = response.data.primary_accounts;
+        } else if (Array.isArray(response.data)) {
+            subAccounts = response.data;
         }
+        
+        console.log(`Found ${subAccounts.length} sub-accounts`);
         
         res.json({ 
             success: true, 
             data: subAccounts,
-            count: subAccounts.length,
-            message: subAccounts.length === 0 ? 'No sub-accounts found. Create your first sub-account using the button above.' : null
+            count: subAccounts.length
         });
         
     } catch (error) {
-        console.error('Vonage subaccounts error:', {
-            status: error.response?.status,
-            statusText: error.response?.statusText,
-            data: error.response?.data,
-            url: error.config?.url
-        });
+        console.error('Subaccounts error:', error.response?.status);
         
-        // Handle different error types
-        if (error.response?.status === 404) {
-            // Try alternative endpoint without master account in URL
+        // Try alternative format using api_key as the account ID
+        if (error.response?.status === 404 || error.response?.status === 400) {
             try {
-                console.log('Trying alternative endpoint format...');
-                const altResponse = await axios.get('https://api.vonage.com/accounts/subaccounts', {
-                    params: {
-                        api_key: config.vonage.apiKey,
-                        api_secret: config.vonage.apiSecret
+                console.log('Trying alternative endpoint...');
+                
+                // Some accounts use this format
+                const altUrl = `https://rest.nexmo.com/accounts/${config.vonage.apiKey}/subaccounts`;
+                
+                const altResponse = await axios.get(altUrl, {
+                    auth: {
+                        username: config.vonage.apiKey,
+                        password: config.vonage.apiSecret
                     }
                 });
                 
-                const subAccounts = altResponse.data._embedded?.primary_accounts || [];
+                const subAccounts = altResponse.data.subaccounts || altResponse.data || [];
                 
                 res.json({ 
                     success: true, 
-                    data: subAccounts,
-                    count: subAccounts.length
+                    data: Array.isArray(subAccounts) ? subAccounts : [],
+                    count: Array.isArray(subAccounts) ? subAccounts.length : 0
                 });
                 
             } catch (altError) {
+                console.error('Alternative endpoint also failed');
                 res.json({ 
                     success: true, 
                     data: [],
-                    message: 'Sub-accounts API endpoint not found. You may not have any sub-accounts yet.',
-                    count: 0
+                    error: 'Could not fetch sub-accounts',
+                    details: altError.response?.data
                 });
             }
-        } else if (error.response?.status === 403) {
-            res.json({ 
-                success: false, 
-                error: '403 - Forbidden',
-                message: 'Access denied to sub-accounts API. Contact Vonage support to verify Partner/Reseller status is active.'
-            });
-        } else if (error.response?.status === 401) {
-            res.json({ 
-                success: false, 
-                error: '401 - Authentication failed',
-                message: 'Check your VONAGE_API_KEY and VONAGE_API_SECRET environment variables'
-            });
         } else {
-            // For any other error, return empty array so the UI doesn't break
             res.json({ 
                 success: true, 
                 data: [],
-                message: 'Unable to fetch sub-accounts. You may not have any created yet.',
-                count: 0,
-                error: error.response?.data?.detail || error.message
+                error: error.response?.data?.error_text || error.message
             });
         }
     }
