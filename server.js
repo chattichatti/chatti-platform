@@ -222,98 +222,104 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
     }
 });
 
-// Diagnostic endpoint to test all Vonage APIs
-app.get('/api/vonage/diagnostic', authenticateToken, async (req, res) => {
-    const results = {
-        credentials: false,
-        balance: false,
-        subaccounts: false,
-        messages: false,
-        reports: false
-    };
+// Test endpoint to debug what's happening
+app.get('/api/debug/test-all', authenticateToken, async (req, res) => {
+    const results = {};
     
     try {
-        // Test 1: Check credentials with balance endpoint
+        // Test 1: Basic credentials
+        console.log('Testing with API Key:', config.vonage.apiKey);
+        
+        // Test 2: Get balance (basic connectivity test)
         try {
-            const balanceResponse = await axios.get('https://rest.nexmo.com/account/get-balance', {
+            const balanceUrl = `https://rest.nexmo.com/account/get-balance`;
+            const balanceResponse = await axios.get(balanceUrl, {
                 params: {
                     api_key: config.vonage.apiKey,
                     api_secret: config.vonage.apiSecret
                 }
             });
-            results.credentials = true;
-            results.balance = balanceResponse.data.value;
-            console.log('Balance check passed:', balanceResponse.data);
+            results.balance = {
+                success: true,
+                value: balanceResponse.data.value
+            };
+            console.log('Balance test passed:', balanceResponse.data.value);
         } catch (error) {
-            console.log('Balance check failed:', error.response?.status);
+            results.balance = {
+                success: false,
+                error: error.response?.status
+            };
+            console.error('Balance test failed:', error.response?.status);
         }
         
-        // Test 2: Check subaccounts API
+        // Test 3: Get subaccounts
         try {
-            const subUrl = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
+            const subUrl = `https://rest.nexmo.com/accounts/${config.vonage.apiKey}/subaccounts`;
+            console.log('Fetching subaccounts from:', subUrl);
+            
             const subResponse = await axios.get(subUrl, {
                 params: {
                     api_key: config.vonage.apiKey,
                     api_secret: config.vonage.apiSecret
                 }
             });
-            results.subaccounts = true;
-            results.subaccountCount = subResponse.data._embedded?.primary_accounts?.length || 0;
-            console.log('Subaccounts check passed');
+            
+            const subAccounts = subResponse.data._embedded?.primary_accounts || subResponse.data.primary_accounts || subResponse.data || [];
+            results.subaccounts = {
+                success: true,
+                count: Array.isArray(subAccounts) ? subAccounts.length : 0,
+                sample: Array.isArray(subAccounts) ? subAccounts[0] : null,
+                responseKeys: Object.keys(subResponse.data)
+            };
+            console.log('Subaccounts test passed, count:', results.subaccounts.count);
         } catch (error) {
-            console.log('Subaccounts check failed:', error.response?.status);
-            results.subaccountError = error.response?.status;
+            results.subaccounts = {
+                success: false,
+                error: error.response?.status,
+                message: error.response?.data?.error_text
+            };
+            console.error('Subaccounts test failed:', error.response?.status);
         }
         
-        // Test 3: Check search messages API
+        // Test 4: Search messages
         try {
             const today = new Date();
-            const startDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
-            const searchResponse = await axios.get('https://rest.nexmo.com/search/messages', {
+            const month = today.getMonth() + 1;
+            const year = today.getFullYear();
+            const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+            const endDate = `${year}-${String(month).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+            
+            const searchUrl = `https://rest.nexmo.com/search/messages`;
+            console.log(`Searching messages from ${startDate} to ${endDate}`);
+            
+            const searchResponse = await axios.get(searchUrl, {
                 params: {
                     api_key: config.vonage.apiKey,
                     api_secret: config.vonage.apiSecret,
                     date_start: `${startDate} 00:00:00`,
-                    date_end: `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')} 23:59:59`
+                    date_end: `${endDate} 23:59:59`
                 }
             });
-            results.messages = true;
-            results.messageCount = searchResponse.data.count || 0;
-            console.log('Messages check passed');
+            
+            results.messages = {
+                success: true,
+                count: searchResponse.data.count || 0,
+                hasItems: !!(searchResponse.data.items && searchResponse.data.items.length > 0)
+            };
+            console.log('Messages test passed, count:', results.messages.count);
         } catch (error) {
-            console.log('Messages check failed:', error.response?.status);
-            results.messageError = error.response?.status;
-        }
-        
-        // Test 4: Check reports API (expected to fail with 403)
-        try {
-            const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-            const reportsResponse = await axios.get('https://api.nexmo.com/v2/reports/records', {
-                headers: {
-                    'Authorization': `Basic ${auth}`
-                },
-                params: {
-                    account_id: config.vonage.accountId,
-                    product: 'SMS',
-                    date_start: '2025-09-01T00:00:00Z',
-                    date_end: '2025-09-02T00:00:00Z'
-                }
-            });
-            results.reports = true;
-            console.log('Reports check passed');
-        } catch (error) {
-            console.log('Reports check failed (expected):', error.response?.status);
-            results.reportsError = error.response?.status;
+            results.messages = {
+                success: false,
+                error: error.response?.status,
+                message: error.response?.data?.error_text
+            };
+            console.error('Messages test failed:', error.response?.status);
         }
         
         res.json({
             success: true,
-            accountId: config.vonage.accountId,
-            results: results,
-            summary: {
-                working: Object.values(results).filter(v => v === true).length,
-                total: 5
-            }
+            apiKey: config.vonage.apiKey ? `${config.vonage.apiKey.substring(0, 4)}...` : 'NOT SET',
+            results: results
         });
         
     } catch (error) {
@@ -1205,14 +1211,22 @@ app.listen(PORT, () => {
     if (!process.env.JWT_SECRET) {
         console.warn('⚠️  WARNING: Using default JWT secret. Set JWT_SECRET environment variable in production!');
     }
-    if (!process.env.VONAGE_API_KEY) {
-        console.warn('⚠️  WARNING: Vonage API credentials not set. Using demo data.');
-        console.warn('Set VONAGE_API_KEY, VONAGE_API_SECRET, and VONAGE_ACCOUNT_ID in environment variables.');
+    
+    // Check Vonage configuration
+    console.log('\n=== VONAGE CONFIGURATION ===');
+    if (!process.env.VONAGE_API_KEY || !process.env.VONAGE_API_SECRET) {
+        console.warn('⚠️  WARNING: Vonage API credentials not set!');
+        console.warn('Set VONAGE_API_KEY and VONAGE_API_SECRET in environment variables.');
     } else {
         console.log('✅ Vonage API credentials configured');
-        console.log('   Account ID: ' + config.vonage.accountId);
+        console.log('   API Key:', process.env.VONAGE_API_KEY ? `${process.env.VONAGE_API_KEY.substring(0, 4)}...` : 'NOT SET');
+        console.log('   Account ID:', config.vonage.accountId || 'Using default: 4c42609f');
+        console.log('   Using API Key in URLs:', config.vonage.apiKey ? 'Yes' : 'No');
     }
+    
     if (!process.env.XERO_CLIENT_ID) {
         console.warn('⚠️  WARNING: Xero API credentials not set.');
     }
+    
+    console.log('============================\n');
 });
