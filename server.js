@@ -1,11 +1,12 @@
-// server.js - Combined Backend + Frontend Server for Chatti Platform
-// This serves both the API and the static files
+// server.js - Combined Backend + Frontend Server for Chatti Platform with Security
 
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 const dotenv = require('dotenv');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 // Load environment variables
 dotenv.config();
@@ -17,6 +18,22 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public')); // Serve static files from public directory
 
+// JWT Configuration
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-production';
+
+// Users database (in production, store in actual database)
+// IMPORTANT: Replace the password hash with your generated hash
+const users = [
+    {
+        id: 1,
+        email: 'admin@chatti.com',
+        password: '$2b$10$XcwjgM3ME8avNSbe8I1LiuyfcmDV0xJukspdvZ18tihi9ZijBNtWy', // <-- REPLACE WITH YOUR GENERATED HASH
+        role: 'admin',
+        name: 'Admin User'
+    }
+    // Add more users as needed
+];
+
 // Configuration
 const config = {
     vonage: {
@@ -27,7 +44,7 @@ const config = {
     xero: {
         clientId: process.env.XERO_CLIENT_ID,
         clientSecret: process.env.XERO_CLIENT_SECRET,
-        redirectUri: process.env.XERO_REDIRECT_URI || 'https://your-app.onrender.com/api/xero/callback'
+        redirectUri: process.env.XERO_REDIRECT_URI || 'https://chatti-platform.onrender.com/api/xero/callback'
     }
 };
 
@@ -38,6 +55,31 @@ let dataStore = {
     rates: {}
 };
 
+// =================== AUTHENTICATION MIDDLEWARE ===================
+
+function authenticateToken(req, res, next) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    
+    if (!token) {
+        return res.status(401).json({ 
+            success: false, 
+            message: 'Access denied - no token provided' 
+        });
+    }
+    
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ 
+                success: false, 
+                message: 'Invalid or expired token' 
+            });
+        }
+        req.user = user;
+        next();
+    });
+}
+
 // =================== FRONTEND ROUTES ===================
 
 // Serve the main app
@@ -45,48 +87,101 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// =================== AUTHENTICATION ROUTES ===================
+
+// Login endpoint with real authentication
+app.post('/api/login', async (req, res) => {
+    const { email, password } = req.body;
+    
+    try {
+        // Find user
+        const user = users.find(u => u.email === email);
+        
+        if (!user) {
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Invalid email or password' 
+            });
+        }
+        
+        // Check password
+        const validPassword = await bcrypt.compare(password, user.password);
+        
+        if (!validPassword) {
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Invalid email or password' 
+            });
+        }
+        
+        // Create JWT token
+        const token = jwt.sign(
+            { id: user.id, email: user.email, role: user.role },
+            JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+        
+        res.json({
+            success: true,
+            token,
+            user: {
+                email: user.email,
+                role: user.role,
+                name: user.name
+            }
+        });
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error during login' 
+        });
+    }
+});
+
+// Logout endpoint (optional - mainly handled client-side)
+app.post('/api/logout', (req, res) => {
+    res.json({ success: true, message: 'Logged out successfully' });
+});
+
 // =================== API ROUTES ===================
 
-// Test endpoint
+// Test endpoint (unprotected)
 app.get('/api/health', (req, res) => {
     res.json({ status: 'OK', message: 'Chatti Platform API is running' });
 });
 
-// Login endpoint (simplified for demo)
-app.post('/api/login', (req, res) => {
-    const { email, password, role } = req.body;
-    
-    // Simple demo authentication
-    if (email && password) {
-        res.json({
-            success: true,
-            user: { email, role },
-            token: 'demo-token-' + Date.now()
-        });
-    } else {
-        res.status(401).json({ success: false, message: 'Invalid credentials' });
-    }
-});
+// =================== PROTECTED VONAGE ENDPOINTS ===================
 
-// =================== VONAGE ENDPOINTS ===================
-
-// Get SMS usage summary
-app.get('/api/vonage/usage/sms', async (req, res) => {
+// Get SMS usage summary (protected)
+app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
     try {
         const { month } = req.query;
         
-        // For demo, return sample data
-        // In production, call actual Vonage API
+        // Check if we have real Vonage credentials
+        if (!config.vonage.apiKey || !config.vonage.apiSecret) {
+            // Return demo data if no credentials
+            const demoUsage = {
+                total: 45678,
+                inbound: 12345,
+                outbound: 33333,
+                byCountry: [
+                    { country: 'AU', code: '+61', inbound: 5000, outbound: 15000 },
+                    { country: 'US', code: '+1', inbound: 3000, outbound: 8000 },
+                    { country: 'UK', code: '+44', inbound: 2000, outbound: 6000 },
+                    { country: 'SG', code: '+65', inbound: 2345, outbound: 4333 }
+                ]
+            };
+            return res.json({ success: true, data: demoUsage, demo: true });
+        }
+        
+        // Real Vonage API call
+        // TODO: Implement actual Vonage API integration here
         const usage = {
-            total: 45678,
-            inbound: 12345,
-            outbound: 33333,
-            byCountry: [
-                { country: 'AU', code: '+61', inbound: 5000, outbound: 15000 },
-                { country: 'US', code: '+1', inbound: 3000, outbound: 8000 },
-                { country: 'UK', code: '+44', inbound: 2000, outbound: 6000 },
-                { country: 'SG', code: '+65', inbound: 2345, outbound: 4333 }
-            ]
+            total: 0,
+            inbound: 0,
+            outbound: 0,
+            byCountry: []
         };
         
         res.json({ success: true, data: usage });
@@ -96,13 +191,13 @@ app.get('/api/vonage/usage/sms', async (req, res) => {
     }
 });
 
-// Get customer SMS usage
-app.get('/api/vonage/usage/customer/:customerId', async (req, res) => {
+// Get customer SMS usage (protected)
+app.get('/api/vonage/usage/customer/:customerId', authenticateToken, async (req, res) => {
     try {
         const { customerId } = req.params;
         const { month } = req.query;
         
-        // Demo data
+        // Demo data for now
         const usage = {
             customerId,
             month: month || new Date().toISOString().slice(0, 7),
@@ -121,8 +216,8 @@ app.get('/api/vonage/usage/customer/:customerId', async (req, res) => {
     }
 });
 
-// Get phone numbers by customer
-app.get('/api/vonage/numbers/:customerId', async (req, res) => {
+// Get phone numbers by customer (protected)
+app.get('/api/vonage/numbers/:customerId', authenticateToken, async (req, res) => {
     try {
         const { customerId } = req.params;
         
@@ -140,10 +235,10 @@ app.get('/api/vonage/numbers/:customerId', async (req, res) => {
     }
 });
 
-// =================== XERO ENDPOINTS ===================
+// =================== PROTECTED XERO ENDPOINTS ===================
 
-// Get Xero auth URL
-app.get('/api/xero/auth', (req, res) => {
+// Get Xero auth URL (protected)
+app.get('/api/xero/auth', authenticateToken, (req, res) => {
     const authUrl = `https://login.xero.com/identity/connect/authorize?` +
         `response_type=code&` +
         `client_id=${config.xero.clientId}&` +
@@ -154,13 +249,15 @@ app.get('/api/xero/auth', (req, res) => {
     res.json({ authUrl });
 });
 
-// Handle Xero callback
+// Handle Xero callback (this one is not protected as it's a callback)
 app.get('/api/xero/callback', async (req, res) => {
     try {
         const { code, state } = req.query;
         
         // Exchange code for token (simplified)
         console.log('Received Xero callback with code:', code);
+        
+        // TODO: Implement actual token exchange
         
         // Redirect to success page
         res.redirect('/?xero=connected');
@@ -170,10 +267,10 @@ app.get('/api/xero/callback', async (req, res) => {
     }
 });
 
-// Get Xero contacts
-app.get('/api/xero/contacts', async (req, res) => {
+// Get Xero contacts (protected)
+app.get('/api/xero/contacts', authenticateToken, async (req, res) => {
     try {
-        // Demo data
+        // Demo data for now
         const contacts = [
             { id: 'XERO-ABC123', name: 'Acme Corp', email: 'accounts@acme.com' },
             { id: 'XERO-DEF456', name: 'TechStart Inc', email: 'billing@techstart.com' }
@@ -185,10 +282,10 @@ app.get('/api/xero/contacts', async (req, res) => {
     }
 });
 
-// =================== CUSTOMER MANAGEMENT ===================
+// =================== PROTECTED CUSTOMER MANAGEMENT ===================
 
-// Get all customers
-app.get('/api/customers', (req, res) => {
+// Get all customers (protected)
+app.get('/api/customers', authenticateToken, (req, res) => {
     const customers = dataStore.customers.length > 0 ? dataStore.customers : [
         {
             id: 1,
@@ -211,8 +308,8 @@ app.get('/api/customers', (req, res) => {
     res.json({ success: true, data: customers });
 });
 
-// Link customer accounts
-app.post('/api/customers/link', (req, res) => {
+// Link customer accounts (protected)
+app.post('/api/customers/link', authenticateToken, (req, res) => {
     const { vonageAccount, xeroContact, customerName } = req.body;
     
     const newCustomer = {
@@ -228,10 +325,10 @@ app.post('/api/customers/link', (req, res) => {
     res.json({ success: true, data: newCustomer });
 });
 
-// =================== PRODUCT & RATES ===================
+// =================== PROTECTED PRODUCT & RATES ===================
 
-// Get product mappings
-app.get('/api/products/mappings', (req, res) => {
+// Get product mappings (protected)
+app.get('/api/products/mappings', authenticateToken, (req, res) => {
     const mappings = [
         { vonageProduct: 'SMS-AU', xeroItem: 'SMS Australia', type: 'SMS' },
         { vonageProduct: 'SMS-US', xeroItem: 'SMS United States', type: 'SMS' },
@@ -241,8 +338,8 @@ app.get('/api/products/mappings', (req, res) => {
     res.json({ success: true, data: mappings });
 });
 
-// Get customer rates
-app.get('/api/customers/:customerId/rates', (req, res) => {
+// Get customer rates (protected)
+app.get('/api/customers/:customerId/rates', authenticateToken, (req, res) => {
     const rates = {
         'SMS-AU': 0.08,
         'SMS-US': 0.01,
@@ -254,10 +351,10 @@ app.get('/api/customers/:customerId/rates', (req, res) => {
     res.json({ success: true, data: rates });
 });
 
-// =================== BILLING ===================
+// =================== PROTECTED BILLING ===================
 
-// Generate draft invoices
-app.post('/api/billing/generate-invoices', (req, res) => {
+// Generate draft invoices (protected)
+app.post('/api/billing/generate-invoices', authenticateToken, (req, res) => {
     const { month } = req.body;
     
     // Demo invoice generation
@@ -296,9 +393,22 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: 'Something went wrong!' });
 });
 
-// Start server
+// =================== START SERVER ===================
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Chatti Platform running on port ${PORT}`);
     console.log(`Visit: http://localhost:${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    
+    // Check for required environment variables
+    if (!process.env.JWT_SECRET) {
+        console.warn('⚠️  WARNING: Using default JWT secret. Set JWT_SECRET environment variable in production!');
+    }
+    if (!process.env.VONAGE_API_KEY) {
+        console.warn('⚠️  WARNING: Vonage API credentials not set. Using demo data.');
+    }
+    if (!process.env.XERO_CLIENT_ID) {
+        console.warn('⚠️  WARNING: Xero API credentials not set.');
+    }
 });
