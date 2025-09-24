@@ -519,12 +519,13 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
         
         try {
             const syncUrl = 'https://api.nexmo.com/v2/reports/records';
+            
+            // Try different parameter combinations to see what works
             const syncParams = {
                 account_id: config.vonage.accountId,
                 product: 'SMS',
-                include_subaccounts: true,
-                date_start: startDate,
-                date_end: endDate
+                date_start: startDate.replace('T00:00:00Z', ''),  // Try without time component
+                date_end: endDate.replace('T23:59:59Z', '')
             };
             
             console.log('Sync URL:', syncUrl);
