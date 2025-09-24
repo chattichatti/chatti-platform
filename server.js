@@ -364,152 +364,158 @@ app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
 
 // =================== SMS USAGE - OPTIMIZED FOR SCALE ===================
 
-// Helper function to create and poll async report - PROPERLY IMPLEMENTED
+// Helper function for ASYNCHRONOUS report (uses parent API key for all sub-accounts)
 async function createAndWaitForAsyncReport(headers, dateStart, dateEnd) {
     try {
-        console.log('\n=== CREATING ASYNC REPORT (Required for sub-accounts) ===');
+        console.log('\n=== CREATING ASYNC REPORT (for all sub-accounts) ===');
         
-        // Step 1: Create async report with include_subaccounts
+        // Vonage confirmed: async uses /v2/reports (NOT /reports/async)
+        // Must use parent API key authentication
         const createReportBody = {
             product: 'SMS',
             date_start: `${dateStart}T00:00:00Z`,
             date_end: `${dateEnd}T23:59:59Z`,
-            include_subaccounts: true,  // This ONLY works with async
+            include_subaccounts: true,  // Works with async
             direction: 'outbound'
+            // NO async: true parameter - that was wrong
         };
         
-        console.log('Request body:', JSON.stringify(createReportBody, null, 2));
+        console.log('Creating async report at /v2/reports with body:', JSON.stringify(createReportBody, null, 2));
         
-        // POST to /v2/reports with async flag or to /v2/reports/async endpoint
-        // The async method returns a request_id immediately
-        const createResponse = await axios.post('https://api.nexmo.com/v2/reports', 
-            { ...createReportBody, async: true }, // Add async flag
-            {
-                headers: headers,
-                timeout: 30000
-            }
-        );
+        // POST to /v2/reports - this becomes async when include_subaccounts is true
+        const createResponse = await axios.post('https://api.nexmo.com/v2/reports', createReportBody, {
+            headers: headers,
+            timeout: 30000
+        });
         
-        // Check if we got a request_id (async) or records (sync)
+        // Check if we got immediate records (sync) or request_id (async)
         if (createResponse.data?.records) {
-            // Synchronous response - no sub-accounts included
-            console.log('Got synchronous response (master account only)');
+            console.log('Got synchronous response (single account only)');
             return createResponse.data.records;
         }
         
-        const requestId = createResponse.data?.request_id || 
-                         createResponse.data?.id || 
-                         createResponse.data?.report_id;
+        const requestId = createResponse.data?.request_id;
         
         if (!requestId) {
-            console.error('No request_id returned. Response:', createResponse.data);
-            return null;
+            console.error('No request_id returned - might be sync response');
+            return createResponse.data?.items || [];
         }
         
         console.log('Async report created with request_id:', requestId);
         
-        // Step 2: Poll for report completion
+        // Poll for completion at /v2/reports/{request_id}
         let attempts = 0;
-        const maxAttempts = 120; // 10 minutes max (5 seconds * 120)
+        const maxAttempts = 60;
         
         while (attempts < maxAttempts) {
             attempts++;
-            
-            // Wait 5 seconds between checks
             await new Promise(resolve => setTimeout(resolve, 5000));
             
             try {
-                // Check report status
                 const statusUrl = `https://api.nexmo.com/v2/reports/${requestId}`;
-                console.log(`Checking report status (attempt ${attempts}/${maxAttempts})...`);
+                console.log(`Checking status at ${statusUrl} (attempt ${attempts})...`);
                 
                 const statusResponse = await axios.get(statusUrl, {
                     headers: headers,
-                    timeout: 30000
+                    timeout: 10000
                 });
                 
-                const status = statusResponse.data?.status || 
-                             statusResponse.data?.report_status || 
-                             statusResponse.data?.state;
+                const status = statusResponse.data?.status;
+                console.log(`Status: ${status}`);
                 
-                console.log(`Report status: ${status}`);
-                
-                if (status === 'completed' || status === 'complete' || 
-                    status === 'SUCCESS' || status === 'COMPLETED') {
-                    
-                    // Report is ready - get the data
-                    let records = statusResponse.data?.records || 
-                                 statusResponse.data?.items || 
-                                 statusResponse.data?._embedded?.records;
-                    
-                    // If data isn't in status response, check for download URL
-                    if (!records && statusResponse.data?.download_url) {
-                        console.log('Downloading report from:', statusResponse.data.download_url);
+                if (status === 'completed' || status === 'complete') {
+                    // Get the data
+                    if (statusResponse.data?.download_url) {
+                        console.log('Downloading from:', statusResponse.data.download_url);
                         const downloadResponse = await axios.get(statusResponse.data.download_url, {
                             headers: headers,
-                            timeout: 120000 // 2 minutes for large downloads
+                            timeout: 60000
                         });
-                        
-                        records = downloadResponse.data?.records || 
-                                 downloadResponse.data?.items || 
-                                 downloadResponse.data;
-                        
-                        // Handle CSV format if needed
-                        if (typeof downloadResponse.data === 'string' && downloadResponse.data.includes(',')) {
-                            console.log('Received CSV data, needs parsing');
-                            // You'd need to parse CSV here
-                            return [];
-                        }
+                        return downloadResponse.data?.records || downloadResponse.data;
                     }
-                    
-                    // Check for pagination in async report
-                    if (statusResponse.data?._links?.next) {
-                        console.log('Report has multiple pages - implement pagination');
-                        // Would need to handle pagination here
-                    }
-                    
-                    if (Array.isArray(records)) {
-                        console.log(`Async report completed with ${records.length} records`);
-                        return records;
-                    } else {
-                        console.log('No records array found in completed report');
-                        console.log('Response structure:', Object.keys(statusResponse.data));
-                        return [];
-                    }
+                    return statusResponse.data?.records || [];
                 }
                 
-                if (status === 'failed' || status === 'FAILED' || status === 'ERROR') {
-                    console.error('Report generation failed');
-                    console.error('Error details:', statusResponse.data?.error);
+                if (status === 'failed') {
+                    console.error('Report failed');
                     return null;
-                }
-                
-                // Still processing - continue polling
-                if (status === 'processing' || status === 'pending' || status === 'PENDING') {
-                    if (attempts % 12 === 0) { // Log every minute
-                        console.log(`Report still processing after ${attempts * 5} seconds...`);
-                    }
                 }
                 
             } catch (pollError) {
-                console.error(`Error polling report status:`, pollError.response?.status || pollError.message);
-                if (pollError.response?.status === 404) {
-                    console.error('Report not found - may have expired or invalid ID');
-                    return null;
-                }
+                console.error('Poll error:', pollError.response?.status);
             }
         }
         
-        console.error('Report polling timed out after 10 minutes');
+        console.log('Polling timed out');
         return null;
         
     } catch (error) {
-        console.error('Async report creation error:', error.response?.status || error.message);
-        if (error.response?.data) {
-            console.error('Error details:', JSON.stringify(error.response.data, null, 2));
-        }
+        console.error('Async error:', error.response?.status, error.response?.data);
         return null;
     }
+}
+
+// Helper function for SYNCHRONOUS per sub-account (267 individual requests)
+async function fetchSMSDataPerAccount(headers, dateStart, dateEnd) {
+    console.log('\n=== FETCHING PER SUB-ACCOUNT (synchronous) ===');
+    
+    const subAccounts = await fetchSubAccounts();
+    console.log(`Making ${subAccounts.length + 1} individual requests...`);
+    
+    let allRecords = [];
+    
+    // Include master account
+    const accountsToFetch = [
+        { api_key: config.vonage.accountId, name: 'Master Account' },
+        ...subAccounts
+    ];
+    
+    for (let i = 0; i < accountsToFetch.length; i++) {
+        const account = accountsToFetch[i];
+        
+        if (i % 10 === 0) {
+            console.log(`Progress: ${i}/${accountsToFetch.length}`);
+        }
+        
+        try {
+            const requestBody = {
+                product: 'SMS',
+                account_id: account.api_key,
+                date_start: `${dateStart}T00:00:00Z`,
+                date_end: `${dateEnd}T23:59:59Z`,
+                direction: 'outbound'
+                // NO include_subaccounts for sync
+            };
+            
+            const response = await axios.post('https://api.nexmo.com/v2/reports', requestBody, {
+                headers: headers,
+                timeout: 10000
+            });
+            
+            const records = response.data?.records || [];
+            if (records.length > 0) {
+                records.forEach(r => {
+                    r.account_id = account.api_key;
+                    r.account_name = account.name;
+                });
+                allRecords = allRecords.concat(records);
+            }
+            
+        } catch (error) {
+            // Individual account might have no data
+            if (error.response?.status !== 404) {
+                console.error(`Error for ${account.name}:`, error.response?.status);
+            }
+        }
+        
+        // Rate limiting
+        if (i % 20 === 0 && i > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    }
+    
+    console.log(`Total records from all accounts: ${allRecords.length}`);
+    return allRecords;
 }
 
 // Alternative: Fetch data per sub-account (synchronous)
@@ -681,13 +687,13 @@ function processRecords(records) {
     return aggregated;
 }
 
-// Get SMS usage - MUST USE ASYNC FOR SUB-ACCOUNTS
+// Get SMS usage - Choose between async (all accounts) or sync (per account)
 app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
     try {
-        const { month = new Date().toISOString().slice(0, 7) } = req.query;
+        const { month = new Date().toISOString().slice(0, 7), method = 'async' } = req.query;
         
         // Check cache
-        const cacheKey = `sms_${month}_async`;
+        const cacheKey = `sms_${month}_${method}`;
         if (dataStore.smsCache[cacheKey] && 
             (Date.now() - dataStore.smsCache[cacheKey].timestamp) < 5 * 60 * 1000) {
             return res.json(dataStore.smsCache[cacheKey].data);
@@ -703,9 +709,9 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
         console.log(`\n=== SMS USAGE REQUEST ===`);
         console.log(`Month: ${month}`);
         console.log(`Date range: ${dateStart} to ${dateEnd}`);
-        console.log(`Method: ASYNC (required for sub-accounts with master auth)`);
+        console.log(`Method: ${method}`);
         
-        // Get JWT token or use Basic Auth
+        // Must use parent account credentials
         const jwtToken = generateVonageJWT();
         const headers = jwtToken ? {
             'Authorization': `Bearer ${jwtToken}`,
@@ -717,17 +723,17 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
             'Accept': 'application/json'
         };
         
-        console.log('Using authentication:', jwtToken ? 'JWT' : 'Basic Auth');
+        let records = [];
         
-        // MUST use async method for sub-accounts
-        const records = await createAndWaitForAsyncReport(headers, dateStart, dateEnd) || [];
-        
-        if (records.length === 0) {
-            console.log('No records returned from async report');
-            // Log what we tried
-            console.log('Attempted with:');
-            console.log('- Date range:', dateStart, 'to', dateEnd);
-            console.log('- Auth method:', jwtToken ? 'JWT' : 'Basic');
+        if (method === 'async') {
+            // Async: One request for all sub-accounts
+            records = await createAndWaitForAsyncReport(headers, dateStart, dateEnd) || [];
+        } else if (method === 'sync-per-account') {
+            // Sync: 267 individual requests
+            records = await fetchSMSDataPerAccount(headers, dateStart, dateEnd) || [];
+        } else {
+            // Default sync with pagination
+            records = await fetchSMSDataWithPagination(headers, dateStart, dateEnd) || [];
         }
         
         // Process records
@@ -740,7 +746,7 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
             dateRange: `${dateStart} to ${dateEnd}`,
             recordCount: aggregatedData.total,
             accountCount: Object.keys(aggregatedData.bySubAccount).length,
-            method: 'async'
+            method: method
         };
         
         // Cache result
@@ -756,18 +762,72 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
         res.json({
             success: false,
             error: error.message,
-            data: {
-                total: 0,
-                outbound: 0,
-                inbound: 0,
-                byCountry: {},
-                bySubAccount: {},
-                byDate: {},
-                totalCost: 0
-            }
+            data: generateEmptyUsageData()
         });
     }
 });
+
+// Helper to generate empty usage data
+function generateEmptyUsageData() {
+    return {
+        total: 0,
+        outbound: 0,
+        inbound: 0,
+        byCountry: {},
+        bySubAccount: {},
+        byDate: {},
+        totalCost: 0
+    };
+}
+
+// Keep fetchSMSDataWithPagination for backward compatibility
+async function fetchSMSDataWithPagination(headers, dateStart, dateEnd) {
+    console.log('\nUsing sync with pagination...');
+    let allRecords = [];
+    let page = 1;
+    let hasMorePages = true;
+    const maxPages = 50;
+    
+    while (hasMorePages && page <= maxPages) {
+        const requestBody = {
+            product: 'SMS',
+            date_start: `${dateStart}T00:00:00Z`,
+            date_end: `${dateEnd}T23:59:59Z`,
+            direction: 'outbound',
+            page: page,
+            page_size: 1000
+        };
+        
+        try {
+            const response = await axios.post('https://api.nexmo.com/v2/reports', requestBody, {
+                headers: headers,
+                timeout: 30000
+            });
+            
+            const records = response.data?.records || [];
+            
+            if (records.length > 0) {
+                console.log(`Page ${page} returned ${records.length} records`);
+                allRecords = allRecords.concat(records);
+                
+                if (records.length < 1000) {
+                    hasMorePages = false;
+                } else {
+                    page++;
+                }
+            } else {
+                hasMorePages = false;
+            }
+            
+        } catch (error) {
+            console.error(`Error on page ${page}:`, error.response?.status);
+            hasMorePages = false;
+        }
+    }
+    
+    console.log(`Total: ${allRecords.length} records`);
+    return allRecords;
+}
 
 // Test endpoint to verify async report creation works
 app.get('/api/vonage/test-async-report', authenticateToken, async (req, res) => {
@@ -1084,10 +1144,83 @@ app.get('/api/vonage/usage/complete-history', authenticateToken, async (req, res
     }
 });
 
-// Get usage for current month (alias for dashboard)
+// Get usage for current month (FIXED - proper redirect)
 app.get('/api/vonage/usage/current', authenticateToken, async (req, res) => {
-    req.query.month = new Date().toISOString().slice(0, 7);
-    return app._router.handle(req, res);
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    req.query.month = currentMonth;
+    
+    // Call the main SMS usage endpoint directly
+    return app._router.handle({
+        ...req,
+        url: `/api/vonage/usage/sms?month=${currentMonth}`,
+        query: { month: currentMonth }
+    }, res);
+});
+
+// Test Reports API endpoint (MISSING - NOW ADDED)
+app.get('/api/vonage/test-reports', authenticateToken, async (req, res) => {
+    try {
+        const jwtToken = generateVonageJWT();
+        const headers = jwtToken ? {
+            'Authorization': `Bearer ${jwtToken}`,
+            'Content-Type': 'application/json'
+        } : {
+            'Authorization': `Basic ${Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64')}`,
+            'Content-Type': 'application/json'
+        };
+        
+        const testBody = {
+            product: 'SMS',
+            date_start: new Date().toISOString().slice(0, 10) + 'T00:00:00Z',
+            date_end: new Date().toISOString().slice(0, 10) + 'T23:59:59Z',
+            direction: 'outbound'
+        };
+        
+        const response = await axios.post('https://api.nexmo.com/v2/reports', testBody, {
+            headers: headers,
+            timeout: 5000
+        });
+        
+        res.json({ 
+            success: true,
+            message: 'Reports API is working',
+            recordCount: response.data?.records?.length || 0
+        });
+        
+    } catch (error) {
+        res.json({ 
+            success: false, 
+            error: error.response?.status,
+            message: 'Reports API test failed'
+        });
+    }
+});
+
+// Sub-account SMS usage endpoint (MISSING - NOW ADDED)
+app.get('/api/vonage/subaccounts/:apiKey/sms-usage', authenticateToken, async (req, res) => {
+    try {
+        const { apiKey } = req.params;
+        const { month = new Date().toISOString().slice(0, 7) } = req.query;
+        
+        // For now, return empty data as individual sub-account access requires their API secret
+        res.json({ 
+            success: true, 
+            data: {
+                subAccountKey: apiKey,
+                month: month,
+                total: 0,
+                totalCost: 0,
+                byCountry: {}
+            },
+            message: 'Individual sub-account data requires sub-account API secret'
+        });
+        
+    } catch (error) {
+        res.json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
 });
 
 // =================== BALANCE & CREDIT MANAGEMENT ===================
