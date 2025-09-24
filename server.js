@@ -314,7 +314,8 @@ app.get('/api/vonage/test-jwt', authenticateToken, async (req, res) => {
             product: 'SMS',
             date_start: '2024-10-01T00:00:00Z',
             date_end: '2024-10-31T23:59:59Z',
-            include_subaccounts: true
+            include_subaccounts: true,
+            direction: 'outbound'  // Required parameter
         };
         
         console.log('Testing JWT with Reports API...');
@@ -684,7 +685,7 @@ async function fetchSMSDataAsync(auth, dateStart, dateEnd) {
             date_start: `${dateStart}T00:00:00Z`,
             date_end: `${dateEnd}T23:59:59Z`,
             include_subaccounts: true,
-            direction: 'outbound'
+            direction: 'outbound'  // Required parameter
         };
         
         console.log('Request URL:', asyncUrl);
@@ -803,12 +804,54 @@ async function fetchSMSDataSync(auth, dateStart, dateEnd) {
     try {
         console.log('\nTrying SYNC Reports API (master account only)...');
         
+        // Generate JWT token for sync method too
+        const jwtToken = generateVonageJWT();
+        
+        const headers = jwtToken ? {
+            'Authorization': `Bearer ${jwtToken}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        } : {
+            'Authorization': `Basic ${auth}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        };
+        
+        // Try with JWT and POST method (as per ChatGPT's info)
+        if (jwtToken) {
+            const syncBody = {
+                product: 'SMS',
+                date_start: `${dateStart}T00:00:00Z`,
+                date_end: `${dateEnd}T23:59:59Z`,
+                direction: 'outbound'  // Required parameter
+            };
+            
+            try {
+                const syncResponse = await axios.post('https://api.nexmo.com/v2/reports', syncBody, {
+                    headers: headers,
+                    timeout: 30000
+                });
+                
+                const records = syncResponse.data?.records || 
+                               syncResponse.data?._embedded?.records || 
+                               [];
+                
+                console.log(`Sync method (JWT) returned ${records.length} records`);
+                if (records.length > 0) return records;
+                
+            } catch (jwtError) {
+                console.log('JWT sync failed:', jwtError.response?.status);
+            }
+        }
+        
+        // Fallback to GET with params (old method)
         const syncUrl = 'https://api.nexmo.com/v2/reports/records';
         const syncParams = {
             account_id: config.vonage.accountId,
             product: 'SMS',
             date_start: `${dateStart}T00:00:00Z`,
-            date_end: `${dateEnd}T23:59:59Z`
+            date_end: `${dateEnd}T23:59:59Z`,
+            direction: 'outbound'
         };
         
         const syncResponse = await axios.get(syncUrl, {
@@ -824,38 +867,15 @@ async function fetchSMSDataSync(auth, dateStart, dateEnd) {
                        syncResponse.data?._embedded?.records || 
                        [];
         
-        console.log(`Sync method returned ${records.length} records`);
+        console.log(`Sync method (Basic) returned ${records.length} records`);
         return records;
         
     } catch (error) {
         console.error('Sync method error:', error.response?.status, error.message);
-        
-        // Try without timezone
-        try {
-            const syncParams = {
-                account_id: config.vonage.accountId,
-                product: 'SMS',
-                date_start: dateStart,
-                date_end: dateEnd
-            };
-            
-            const syncResponse = await axios.get('https://api.nexmo.com/v2/reports/records', {
-                headers: {
-                    'Authorization': `Basic ${auth}`,
-                    'Accept': 'application/json'
-                },
-                params: syncParams,
-                timeout: 30000
-            });
-            
-            const records = syncResponse.data?.records || [];
-            console.log(`Sync method (no TZ) returned ${records.length} records`);
-            return records;
-            
-        } catch (retryError) {
-            console.error('Sync retry error:', retryError.response?.status);
-            return null;
+        if (error.response?.data) {
+            console.error('Error details:', JSON.stringify(error.response.data, null, 2));
         }
+        return null;
     }
 }
 
