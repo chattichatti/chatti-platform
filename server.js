@@ -1,5 +1,5 @@
 // server.js - Complete Backend Server for Chatti Platform with Vonage Reseller Integration
-// Version: Fixed with CORRECT async Reports API URLs per Vonage documentation
+// Version: Updated to match Vonage Support's successful request format
 
 const express = require('express');
 const cors = require('cors');
@@ -163,23 +163,22 @@ function generateVonageJWT() {
     }
 }
 
-// =============== Reports API (Async) - CORRECTED URLS ===============
+// =============== Reports API - MATCHING VONAGE SUPPORT'S FORMAT ===============
 
 async function createAsyncReport(headers, dateStart, dateEnd) {
+    // Match exactly what Vonage support used
     const body = {
-        product: 'SMS',
-        // Omit account_id when aggregating across subaccounts
+        account_id: config.vonage.accountId,  // Include account_id
+        product: "SMS",
+        include_subaccounts: "true",  // String, not boolean
+        direction: "outbound",
         date_start: `${dateStart}T00:00:00Z`,
         date_end: `${dateEnd}T23:59:59Z`,
-        direction: 'outbound',
-        include_subaccounts: true,
-        async: true,  // This parameter makes it async
-        callback_url: null  // Optional webhook
+        callback_url: null  // Set to null or your webhook URL
     };
     
     console.log('Creating async report with body:', JSON.stringify(body, null, 2));
     
-    // CORRECTED: Use /v2/reports NOT /v2/reports/async
     const url = 'https://api.nexmo.com/v2/reports';
     
     try {
@@ -188,13 +187,15 @@ async function createAsyncReport(headers, dateStart, dateEnd) {
         
         if (requestId) {
             console.log(`Async report created successfully with request_id: ${requestId}`);
+            return { type: 'async', requestId };
         } else if (r.data?.records) {
             // Sometimes returns synchronous data directly
             console.log('Got synchronous response with records');
             return { type: 'sync', data: r.data.records };
         }
         
-        return { type: 'async', requestId };
+        console.log('Unexpected response:', JSON.stringify(r.data, null, 2));
+        throw new Error('No request_id or records in response');
     } catch (error) {
         console.error('Create async report error:', error.response?.status, error.response?.data);
         throw error;
@@ -202,7 +203,6 @@ async function createAsyncReport(headers, dateStart, dateEnd) {
 }
 
 async function pollAsyncReport(headers, requestId, timeoutMs = 10 * 60 * 1000) {
-    // CORRECTED: Use /v2/reports/{request_id} NOT /v2/reports/async/{request_id}
     const statusUrl = `https://api.nexmo.com/v2/reports/${requestId}`;
     const start = Date.now();
     let attempts = 0;
@@ -229,6 +229,9 @@ async function pollAsyncReport(headers, requestId, timeoutMs = 10 * 60 * 1000) {
                     console.log('Report completed with embedded data');
                     return { type: 'embedded', data: records };
                 }
+                
+                console.log('Report completed but no data found in response');
+                console.log('Response structure:', JSON.stringify(s.data, null, 2));
             }
             
             if (/failed|error/i.test(state)) {
@@ -238,6 +241,9 @@ async function pollAsyncReport(headers, requestId, timeoutMs = 10 * 60 * 1000) {
             if (pollError.response?.status === 404) {
                 console.error('Report not found - may have expired or invalid request_id');
                 throw new Error('Report not found');
+            }
+            if (!pollError.message?.includes('Async report failed')) {
+                console.error('Poll error:', pollError.message);
             }
             throw pollError;
         }
@@ -406,12 +412,12 @@ async function fetchSyncReportData(headers, dateStart, dateEnd) {
         console.log('\n=== FALLBACK: Trying synchronous Reports API (master only) ===');
         
         const body = {
-            product: 'SMS',
             account_id: config.vonage.accountId,
+            product: "SMS",
             date_start: `${dateStart}T00:00:00Z`,
             date_end: `${dateEnd}T23:59:59Z`,
-            direction: 'outbound'
-            // NO async parameter = synchronous
+            direction: "outbound"
+            // NO include_subaccounts for sync to avoid 403
         };
         
         const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
@@ -572,7 +578,7 @@ app.get('/api/vonage/subaccounts/:id/sms-usage', authenticateToken, async (req, 
 
 // =================== SMS USAGE ENDPOINTS ===================
 
-// SMS usage endpoint - UPDATED WITH CORRECTED ASYNC URLS
+// SMS usage endpoint - MATCHING VONAGE SUPPORT'S FORMAT
 app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
     try {
         const { month = new Date().toISOString().slice(0, 7) } = req.query;
@@ -593,29 +599,32 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
         
         console.log(`\n=== SMS USAGE REQUEST FOR ${month} ===`);
         console.log(`Date range: ${dateStart} to ${dateEnd}`);
+        console.log(`Account ID: ${config.vonage.accountId}`);
         
-        // Prepare authentication headers - ASYNC REQUIRES JWT
+        // Try JWT first, fall back to Basic auth
+        let headers;
         const jwtToken = generateVonageJWT();
         
-        if (!jwtToken) {
-            console.error('Cannot generate JWT - check VONAGE_APPLICATION_ID and VONAGE_PRIVATE_KEY');
-            return res.json({
-                success: false,
-                error: 'JWT generation failed - check application configuration',
-                data: processRecords([])
-            });
+        if (jwtToken) {
+            console.log('Using JWT authentication');
+            headers = {
+                'Authorization': `Bearer ${jwtToken}`,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            };
+        } else {
+            console.log('Using Basic authentication (JWT not available)');
+            headers = {
+                'Authorization': `Basic ${Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64')}`,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            };
         }
         
-        const headers = {
-            'Authorization': `Bearer ${jwtToken}`,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        };
-        
-        // Use the CORRECTED async flow
+        // Use async flow matching Vonage support's format
         let records = [];
         try {
-            console.log('=== ASYNC REPORT: Using corrected URLs ===');
+            console.log('=== ASYNC REPORT: Using Vonage Support verified format ===');
             
             const createResult = await createAsyncReport(headers, dateStart, dateEnd);
             
@@ -658,14 +667,16 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
             month: month,
             dateRange: `${dateStart} to ${dateEnd}`,
             recordCount: aggregatedData.total,
-            method: records.length > 0 ? 'async-corrected' : 'fallback'
+            method: records.length > 0 ? 'async-vonage-format' : 'fallback'
         };
         
-        // Cache the result
-        dataStore.smsCache[cacheKey] = {
-            data: result,
-            timestamp: Date.now()
-        };
+        // Cache the result if we got data
+        if (aggregatedData.total > 0) {
+            dataStore.smsCache[cacheKey] = {
+                data: result,
+                timestamp: Date.now()
+            };
+        }
         
         res.json(result);
         
@@ -694,21 +705,21 @@ app.get('/api/vonage/dashboard/summary', authenticateToken, async (req, res) => 
         const dateStart = `${year}-${String(month).padStart(2, '0')}-01`;
         const dateEnd = new Date().toISOString().slice(0, 10);
         
+        // Try JWT first, fall back to Basic auth
+        let headers;
         const jwtToken = generateVonageJWT();
         
-        if (!jwtToken) {
-            return res.json({
-                success: false,
-                error: 'JWT generation failed',
-                totalSMS: 0,
-                totalCost: 0
-            });
+        if (jwtToken) {
+            headers = {
+                'Authorization': `Bearer ${jwtToken}`,
+                'Content-Type': 'application/json'
+            };
+        } else {
+            headers = {
+                'Authorization': `Basic ${Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64')}`,
+                'Content-Type': 'application/json'
+            };
         }
-        
-        const headers = {
-            'Authorization': `Bearer ${jwtToken}`,
-            'Content-Type': 'application/json'
-        };
         
         let records = [];
         try {
@@ -791,13 +802,13 @@ app.listen(PORT, () => {
     }
     
     if (!process.env.VONAGE_APPLICATION_ID) {
-        console.warn('⚠️  VONAGE_APPLICATION_ID: Not set (async reports will fail)');
+        console.warn('⚠️  VONAGE_APPLICATION_ID: Not set (will use Basic auth)');
     } else {
         console.log('✅ VONAGE_APPLICATION_ID: Configured');
     }
     
     if (!process.env.VONAGE_PRIVATE_KEY) {
-        console.warn('⚠️  VONAGE_PRIVATE_KEY: Not set (async reports will fail)');
+        console.warn('⚠️  VONAGE_PRIVATE_KEY: Not set (will use Basic auth)');
     } else {
         console.log('✅ VONAGE_PRIVATE_KEY: Configured');
     }
