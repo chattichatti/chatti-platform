@@ -1,5 +1,5 @@
 // server.js - Complete Backend Server for Chatti Platform with Vonage Reseller Integration
-// Version: Fixed date format for Reports API
+// Version: Complete solution for SMS tracking across 267 sub-accounts
 
 const express = require('express');
 const cors = require('cors');
@@ -33,7 +33,7 @@ const users = [
     }
 ];
 
-// Configuration - ensure environment variables are strings
+// Configuration
 const config = {
     vonage: {
         apiKey: String(process.env.VONAGE_API_KEY || '4c42609f'),
@@ -54,10 +54,11 @@ let dataStore = {
     customers: [],
     usage: {},
     rates: {},
-    customerMappings: []
+    customerMappings: [],
+    smsCache: {} // Cache SMS data by month
 };
 
-// Cache for sub-accounts to avoid repeated fetches
+// Cache for sub-accounts
 let subAccountsCache = {
     data: [],
     lastFetch: 0,
@@ -99,7 +100,6 @@ function getCountryName(code) {
 
 // Helper to fetch sub-accounts with caching
 async function fetchSubAccounts() {
-    // Check cache first
     if (subAccountsCache.data.length > 0 && 
         (Date.now() - subAccountsCache.lastFetch) < subAccountsCache.cacheDuration) {
         console.log('Returning cached sub-accounts:', subAccountsCache.data.length);
@@ -136,7 +136,7 @@ async function fetchSubAccounts() {
         
     } catch (error) {
         console.error('Error fetching sub-accounts:', error.message);
-        return subAccountsCache.data; // Return cached data on error
+        return subAccountsCache.data;
     }
 }
 
@@ -263,46 +263,113 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
     }
 });
 
-// Test Reports API
-app.get('/api/vonage/test-reports', authenticateToken, async (req, res) => {
+// Test which date format works for Reports API
+app.get('/api/vonage/test-date-formats', authenticateToken, async (req, res) => {
     try {
         const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        const testDate = new Date().toISOString().slice(0, 10);
         
-        const response = await axios.get('https://api.nexmo.com/v2/reports/records', {
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/json'
-            },
-            params: {
-                account_id: config.vonage.accountId,
-                product: 'SMS',
-                date_start: testDate,
-                date_end: testDate
-            },
-            timeout: 5000
-        });
+        // Generate various date formats for today
+        const today = new Date();
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
         
-        res.json({ 
-            success: true,
-            message: 'Reports API v2 is working!',
-            data: response.data
+        const dateFormats = [
+            {
+                name: 'Simple YYYY-MM-DD',
+                start: today.toISOString().slice(0, 10),
+                end: today.toISOString().slice(0, 10)
+            },
+            {
+                name: 'RFC3339 with Z',
+                start: `${today.toISOString().slice(0, 10)}T00:00:00Z`,
+                end: `${today.toISOString().slice(0, 10)}T23:59:59Z`
+            },
+            {
+                name: 'ISO 8601 Full',
+                start: today.toISOString(),
+                end: today.toISOString()
+            },
+            {
+                name: 'Unix Timestamp',
+                start: Math.floor(yesterday.getTime() / 1000),
+                end: Math.floor(today.getTime() / 1000)
+            },
+            {
+                name: 'No dates (default)',
+                start: null,
+                end: null
+            }
+        ];
+        
+        const results = [];
+        
+        for (const format of dateFormats) {
+            console.log(`Testing format: ${format.name}`);
+            
+            try {
+                const params = {
+                    account_id: config.vonage.accountId,
+                    product: 'SMS'
+                };
+                
+                if (format.start !== null) {
+                    params.date_start = format.start;
+                    params.date_end = format.end;
+                }
+                
+                const response = await axios.get('https://api.nexmo.com/v2/reports/records', {
+                    headers: {
+                        'Authorization': `Basic ${auth}`,
+                        'Content-Type': 'application/json'
+                    },
+                    params: params,
+                    timeout: 10000
+                });
+                
+                results.push({
+                    format: format.name,
+                    success: true,
+                    recordCount: response.data?.records?.length || 0,
+                    sample: format
+                });
+                
+                // If we found a working format, use it
+                if (response.data?.records?.length > 0) {
+                    return res.json({
+                        success: true,
+                        workingFormat: format.name,
+                        sample: format,
+                        recordCount: response.data.records.length,
+                        results: results
+                    });
+                }
+                
+            } catch (error) {
+                results.push({
+                    format: format.name,
+                    success: false,
+                    error: error.response?.status,
+                    message: error.response?.data?.detail || error.response?.data?.title
+                });
+            }
+        }
+        
+        res.json({
+            success: false,
+            message: 'No working date format found',
+            results: results
         });
         
     } catch (error) {
-        res.json({ 
-            success: false, 
-            error: error.response?.status || error.message,
-            errorDetail: error.response?.data,
-            message: 'Reports API v2 test failed',
-            solution: 'Contact Vonage support if this persists'
+        res.json({
+            success: false,
+            error: error.message
         });
     }
 });
 
 // =================== VONAGE SUBACCOUNTS API ===================
 
-// Get all sub-accounts - PROPERLY EXTRACTS NESTED SUBACCOUNTS
 app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
     try {
         const subAccounts = await fetchSubAccounts();
@@ -324,171 +391,54 @@ app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
     }
 });
 
-// Get specific sub-account
-app.get('/api/vonage/subaccounts/:subAccountKey', authenticateToken, async (req, res) => {
-    try {
-        const { subAccountKey } = req.params;
-        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts/${subAccountKey}`;
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        
-        const response = await axios.get(url, {
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/json'
-            },
-            timeout: 10000
-        });
-        
-        res.json({ 
-            success: true, 
-            data: response.data 
-        });
-        
-    } catch (error) {
-        res.json({ 
-            success: false, 
-            error: error.response?.data?.error_text || error.message 
-        });
-    }
+// =================== SMS USAGE - COMPLETE IMPLEMENTATION ===================
+
+// Get SMS usage for current month (for dashboard)
+app.get('/api/vonage/usage/current', authenticateToken, async (req, res) => {
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    req.query.month = currentMonth;
+    return getSMSUsage(req, res);
 });
 
-// Get SMS usage for a specific sub-account
-app.get('/api/vonage/subaccounts/:subAccountKey/sms-usage', authenticateToken, async (req, res) => {
+// Get SMS usage for specific month or date range
+app.get('/api/vonage/usage/sms', authenticateToken, getSMSUsage);
+
+async function getSMSUsage(req, res) {
     try {
-        const { subAccountKey } = req.params;
-        const { month = new Date().toISOString().slice(0, 7) } = req.query;
+        const { month = new Date().toISOString().slice(0, 7), startDate, endDate } = req.query;
         
-        if (!subAccountKey || subAccountKey === 'undefined') {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'Invalid sub-account key' 
-            });
+        // Check cache first
+        const cacheKey = `${month}_${startDate}_${endDate}`;
+        if (dataStore.smsCache[cacheKey] && 
+            (Date.now() - dataStore.smsCache[cacheKey].timestamp) < 5 * 60 * 1000) {
+            console.log('Returning cached SMS data for:', cacheKey);
+            return res.json(dataStore.smsCache[cacheKey].data);
         }
-        
-        // For now, return empty data since individual sub-account access requires their API secret
-        res.json({ 
-            success: true, 
-            data: {
-                subAccountKey: subAccountKey,
-                month: month,
-                total: 0,
-                totalCost: 0,
-                byCountry: {}
-            }
-        });
-        
-    } catch (error) {
-        res.status(500).json({ 
-            success: false, 
-            error: error.message 
-        });
-    }
-});
-
-// Create sub-account
-app.post('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
-    try {
-        const { name, secret, use_primary_account_balance = true } = req.body;
-        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        
-        const requestData = {
-            name: name,
-            use_primary_account_balance: use_primary_account_balance
-        };
-        
-        if (secret) {
-            requestData.secret = secret;
-        }
-        
-        const response = await axios.post(url, requestData, {
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/json'
-            },
-            timeout: 10000
-        });
-        
-        // Clear cache after creating new sub-account
-        subAccountsCache.data = [];
-        
-        res.json({ 
-            success: true, 
-            data: response.data 
-        });
-        
-    } catch (error) {
-        res.json({ 
-            success: false, 
-            error: error.response?.data?.error_text || error.message 
-        });
-    }
-});
-
-// Update sub-account
-app.patch('/api/vonage/subaccounts/:subAccountKey', authenticateToken, async (req, res) => {
-    try {
-        const { subAccountKey } = req.params;
-        const updateData = req.body;
-        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts/${subAccountKey}`;
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        
-        const response = await axios.patch(url, updateData, {
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/json'
-            },
-            timeout: 10000
-        });
-        
-        // Clear cache after updating sub-account
-        subAccountsCache.data = [];
-        
-        res.json({ 
-            success: true, 
-            data: response.data 
-        });
-        
-    } catch (error) {
-        res.json({ 
-            success: false, 
-            error: error.response?.data?.error_text || error.message 
-        });
-    }
-});
-
-// =================== SMS USAGE - FIXED DATE FORMAT ===================
-
-// Get SMS usage - FIXED FOR RESELLER ACCOUNTS WITH PROPER DATE FORMAT
-app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
-    try {
-        const { month = new Date().toISOString().slice(0, 7) } = req.query;
         
         if (!config.vonage.apiKey || !config.vonage.apiSecret) {
             return res.json({ 
                 success: true,
-                data: {
-                    total: 0,
-                    outbound: 0,
-                    inbound: 0,
-                    byCountry: {},
-                    bySubAccount: {},
-                    totalCost: 0
-                },
+                data: generateEmptyUsageData(),
                 message: 'Vonage credentials not configured'
             });
         }
         
-        // Calculate date range - SIMPLE FORMAT
-        const year = parseInt(month.split('-')[0]);
-        const monthNum = parseInt(month.split('-')[1]);
-        const startDate = `${year}-${String(monthNum).padStart(2, '0')}-01`;
-        const lastDay = new Date(year, monthNum, 0).getDate();
-        const endDate = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        // Calculate date range
+        let dateStart, dateEnd;
+        
+        if (startDate && endDate) {
+            dateStart = startDate;
+            dateEnd = endDate;
+        } else {
+            const year = parseInt(month.split('-')[0]);
+            const monthNum = parseInt(month.split('-')[1]);
+            dateStart = `${year}-${String(monthNum).padStart(2, '0')}-01`;
+            const lastDay = new Date(year, monthNum, 0).getDate();
+            dateEnd = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        }
         
         console.log(`\n=== SMS USAGE REQUEST ===`);
-        console.log(`Month: ${month}`);
-        console.log(`Date range: ${startDate} to ${endDate} (YYYY-MM-DD format)`);
+        console.log(`Date range: ${dateStart} to ${dateEnd}`);
         console.log(`Account ID: ${config.vonage.accountId}`);
         
         const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
@@ -500,207 +450,283 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
             inbound: 0,
             byCountry: {},
             bySubAccount: {},
-            totalCost: 0
+            byDate: {},
+            totalCost: 0,
+            currentMonth: month
         };
         
-        // Debug info
-        const debugInfo = {
-            attemptedSync: false,
-            syncError: null,
-            attemptedAsync: false,
-            asyncError: null
-        };
+        // Try to fetch SMS data using different methods
+        let smsData = await fetchSMSDataAsync(auth, dateStart, dateEnd);
         
-        // METHOD 1: Try ASYNCHRONOUS method FIRST (required for sub-accounts)
-        console.log('\n1. Trying ASYNCHRONOUS Reports API (required for sub-accounts)...');
-        debugInfo.attemptedAsync = true;
+        if (!smsData || smsData.length === 0) {
+            smsData = await fetchSMSDataSync(auth, dateStart, dateEnd);
+        }
         
-        try {
-            const asyncUrl = 'https://api.nexmo.com/v2/reports';
-            const asyncBody = {
-                product: 'SMS',
-                account_id: config.vonage.accountId,
-                include_subaccounts: true,  // This ONLY works with async
-                date_start: startDate,      // Simple YYYY-MM-DD format
-                date_end: endDate           // Simple YYYY-MM-DD format
-            };
+        if (!smsData || smsData.length === 0) {
+            smsData = await fetchSMSDataNoDate(auth);
+        }
+        
+        // Process SMS data
+        if (smsData && smsData.length > 0) {
+            console.log(`Processing ${smsData.length} SMS records`);
             
-            console.log('Async URL:', asyncUrl);
-            console.log('Async body:', JSON.stringify(asyncBody, null, 2));
-            
-            const createReportResponse = await axios.post(asyncUrl, asyncBody, {
-                headers: {
-                    'Authorization': `Basic ${auth}`,
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
-                },
-                timeout: 10000
-            });
-            
-            console.log('Async report creation response:', createReportResponse.status);
-            console.log('Response data:', createReportResponse.data);
-            
-            const reportRequestId = createReportResponse.data?.request_id || createReportResponse.data?.id;
-            
-            if (reportRequestId) {
-                console.log('Report request created with ID:', reportRequestId);
+            for (const record of smsData) {
+                aggregatedUsage.total++;
                 
-                // Wait for report to be ready
-                let reportReady = false;
-                let attempts = 0;
-                const maxAttempts = 15;  // Increase max attempts
-                let reportData = null;
-                
-                while (!reportReady && attempts < maxAttempts) {
-                    attempts++;
-                    
-                    // Wait progressively longer between checks
-                    const waitTime = Math.min(3000 + (attempts * 1000), 10000);
-                    console.log(`Waiting ${waitTime}ms before checking report status (attempt ${attempts})...`);
-                    await new Promise(resolve => setTimeout(resolve, waitTime));
-                    
-                    try {
-                        const statusUrl = `https://api.nexmo.com/v2/reports/${reportRequestId}`;
-                        console.log(`Checking report status at: ${statusUrl}`);
-                        
-                        const statusResponse = await axios.get(statusUrl, {
-                            headers: {
-                                'Authorization': `Basic ${auth}`,
-                                'Accept': 'application/json'
-                            },
-                            timeout: 10000
-                        });
-                        
-                        const status = statusResponse.data?.status || statusResponse.data?.report_status;
-                        console.log(`Report status: ${status}`);
-                        
-                        if (status === 'completed' || status === 'complete' || status === 'SUCCESS' || status === 'COMPLETED') {
-                            reportReady = true;
-                            
-                            // Check different possible data locations
-                            reportData = statusResponse.data?.items || 
-                                        statusResponse.data?.records || 
-                                        statusResponse.data?._embedded?.records ||
-                                        statusResponse.data?.data;
-                            
-                            if (!reportData && statusResponse.data?.download_url) {
-                                console.log('Downloading report from:', statusResponse.data.download_url);
-                                const downloadResponse = await axios.get(statusResponse.data.download_url, {
-                                    headers: { 'Authorization': `Basic ${auth}` },
-                                    timeout: 30000
-                                });
-                                reportData = downloadResponse.data?.items || 
-                                           downloadResponse.data?.records || 
-                                           downloadResponse.data;
-                            }
-                            
-                            if (!reportData && statusResponse.data?._links?.download?.href) {
-                                const downloadUrl = statusResponse.data._links.download.href;
-                                console.log('Downloading from _links:', downloadUrl);
-                                const downloadResponse = await axios.get(downloadUrl, {
-                                    headers: { 'Authorization': `Basic ${auth}` },
-                                    timeout: 30000
-                                });
-                                reportData = downloadResponse.data?.items || 
-                                           downloadResponse.data?.records || 
-                                           downloadResponse.data;
-                            }
-                        } else if (status === 'failed' || status === 'error' || status === 'FAILED') {
-                            throw new Error(`Report generation failed with status: ${status}`);
-                        }
-                        
-                    } catch (statusError) {
-                        console.error(`Error checking report status:`, statusError.message);
-                        if (attempts >= maxAttempts) throw statusError;
-                    }
+                // Direction
+                if (record.direction === 'outbound' || record.direction === 'out' || 
+                    record.type === 'MT' || record.type === 'SMS') {
+                    aggregatedUsage.outbound++;
+                } else if (record.direction === 'inbound' || record.direction === 'in' || 
+                          record.type === 'MO') {
+                    aggregatedUsage.inbound++;
                 }
                 
-                if (reportData && Array.isArray(reportData) && reportData.length > 0) {
-                    console.log(`SUCCESS! Processing ${reportData.length} records from async report`);
-                    
-                    // Process the report data
-                    reportData.forEach(record => {
-                        aggregatedUsage.total++;
-                        
-                        if (record.direction === 'outbound' || record.type === 'MT' || record.type === 'SMS') {
-                            aggregatedUsage.outbound++;
-                        } else if (record.direction === 'inbound' || record.type === 'MO') {
-                            aggregatedUsage.inbound++;
-                        }
-                        
-                        const cost = parseFloat(record.price || record.total_price || 0);
-                        aggregatedUsage.totalCost += cost;
-                        
-                        const country = record.to_country || record.country || getCountryFromNumber(record.to);
-                        const countryName = getCountryName(country);
-                        
-                        if (!aggregatedUsage.byCountry[countryName]) {
-                            aggregatedUsage.byCountry[countryName] = {
-                                code: country,
-                                name: countryName,
-                                count: 0,
-                                cost: 0
-                            };
-                        }
-                        aggregatedUsage.byCountry[countryName].count++;
-                        aggregatedUsage.byCountry[countryName].cost += cost;
-                        
-                        const accountId = record.account_id || record.from || 'master';
-                        const accountName = record.account_name || accountId;
-                        
-                        if (!aggregatedUsage.bySubAccount[accountId]) {
-                            aggregatedUsage.bySubAccount[accountId] = {
-                                accountId: accountId,
-                                accountName: accountName,
-                                count: 0,
-                                cost: 0
-                            };
-                        }
-                        aggregatedUsage.bySubAccount[accountId].count++;
-                        aggregatedUsage.bySubAccount[accountId].cost += cost;
-                    });
-                    
-                    console.log('SUCCESS: Async Reports API with sub-accounts worked!');
-                    return res.json({ 
-                        success: true, 
-                        data: aggregatedUsage,
-                        month: month,
-                        recordCount: aggregatedUsage.total,
-                        method: 'asynchronous'
-                    });
+                // Cost
+                const cost = parseFloat(record.price || record.total_price || record.cost || 0);
+                aggregatedUsage.totalCost += cost;
+                
+                // Country
+                const country = record.to_country || record.country || getCountryFromNumber(record.to || record.number);
+                const countryName = getCountryName(country);
+                
+                if (!aggregatedUsage.byCountry[countryName]) {
+                    aggregatedUsage.byCountry[countryName] = {
+                        code: country,
+                        name: countryName,
+                        count: 0,
+                        cost: 0
+                    };
+                }
+                aggregatedUsage.byCountry[countryName].count++;
+                aggregatedUsage.byCountry[countryName].cost += cost;
+                
+                // Sub-account
+                const accountId = record.account_id || record.api_key || 'master';
+                const accountName = record.account_name || record.api_key || accountId;
+                
+                if (!aggregatedUsage.bySubAccount[accountId]) {
+                    aggregatedUsage.bySubAccount[accountId] = {
+                        accountId: accountId,
+                        accountName: accountName,
+                        count: 0,
+                        cost: 0,
+                        byCountry: {}
+                    };
+                }
+                aggregatedUsage.bySubAccount[accountId].count++;
+                aggregatedUsage.bySubAccount[accountId].cost += cost;
+                
+                // Add country breakdown per sub-account
+                if (!aggregatedUsage.bySubAccount[accountId].byCountry[countryName]) {
+                    aggregatedUsage.bySubAccount[accountId].byCountry[countryName] = {
+                        count: 0,
+                        cost: 0
+                    };
+                }
+                aggregatedUsage.bySubAccount[accountId].byCountry[countryName].count++;
+                aggregatedUsage.bySubAccount[accountId].byCountry[countryName].cost += cost;
+                
+                // Date breakdown (for charts)
+                const messageDate = record.date_start || record.timestamp || record.created_at;
+                if (messageDate) {
+                    const dateKey = messageDate.slice(0, 10);
+                    if (!aggregatedUsage.byDate[dateKey]) {
+                        aggregatedUsage.byDate[dateKey] = {
+                            count: 0,
+                            cost: 0
+                        };
+                    }
+                    aggregatedUsage.byDate[dateKey].count++;
+                    aggregatedUsage.byDate[dateKey].cost += cost;
                 }
             }
             
-        } catch (asyncError) {
-            console.error('Async method failed:', asyncError.response?.status);
-            console.error('Error details:', asyncError.response?.data);
-            debugInfo.asyncError = {
-                status: asyncError.response?.status,
-                data: asyncError.response?.data,
-                message: asyncError.message
+            // Cache the result
+            const result = {
+                success: true,
+                data: aggregatedUsage,
+                month: month,
+                dateRange: `${dateStart} to ${dateEnd}`,
+                recordCount: aggregatedUsage.total
             };
+            
+            dataStore.smsCache[cacheKey] = {
+                data: result,
+                timestamp: Date.now()
+            };
+            
+            return res.json(result);
         }
         
-        // METHOD 2: Try SYNCHRONOUS as fallback (won't include sub-accounts)
-        console.log('\n2. Trying SYNCHRONOUS Reports API (master account only)...');
-        debugInfo.attemptedSync = true;
+        // No data found
+        return res.json({
+            success: true,
+            data: aggregatedUsage,
+            month: month,
+            dateRange: `${dateStart} to ${dateEnd}`,
+            recordCount: 0,
+            message: 'No SMS data found for this period'
+        });
         
-        try {
-            const syncUrl = 'https://api.nexmo.com/v2/reports/records';
+    } catch (error) {
+        console.error('SMS usage endpoint error:', error.message);
+        
+        return res.json({
+            success: true,
+            data: generateEmptyUsageData(),
+            error: error.message,
+            message: 'Error fetching SMS data'
+        });
+    }
+}
+
+// Helper function to fetch SMS data using async method
+async function fetchSMSDataAsync(auth, dateStart, dateEnd) {
+    try {
+        console.log('\nTrying ASYNC Reports API with sub-accounts...');
+        
+        const asyncUrl = 'https://api.nexmo.com/v2/reports';
+        const asyncBody = {
+            product: 'SMS',
+            account_id: config.vonage.accountId,
+            include_subaccounts: true,
+            date_start: `${dateStart}T00:00:00Z`,
+            date_end: `${dateEnd}T23:59:59Z`
+        };
+        
+        const createReportResponse = await axios.post(asyncUrl, asyncBody, {
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 10000
+        });
+        
+        const reportId = createReportResponse.data?.request_id || 
+                        createReportResponse.data?.id || 
+                        createReportResponse.data?.report_id;
+        
+        if (!reportId) {
+            console.log('No report ID returned from async API');
+            return null;
+        }
+        
+        console.log('Report created with ID:', reportId);
+        
+        // Wait for report to complete
+        let attempts = 0;
+        const maxAttempts = 20;
+        
+        while (attempts < maxAttempts) {
+            attempts++;
             
-            // DON'T use include_subaccounts - it's not supported with sync
-            // Use simple date format
+            // Wait before checking
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            
+            try {
+                const statusUrl = `https://api.nexmo.com/v2/reports/${reportId}`;
+                const statusResponse = await axios.get(statusUrl, {
+                    headers: {
+                        'Authorization': `Basic ${auth}`,
+                        'Accept': 'application/json'
+                    },
+                    timeout: 10000
+                });
+                
+                const status = statusResponse.data?.status || 
+                             statusResponse.data?.report_status || 
+                             statusResponse.data?.state;
+                
+                console.log(`Report status (attempt ${attempts}): ${status}`);
+                
+                if (status === 'completed' || status === 'complete' || 
+                    status === 'SUCCESS' || status === 'COMPLETED') {
+                    
+                    // Try different locations for the data
+                    let reportData = statusResponse.data?.items || 
+                                    statusResponse.data?.records || 
+                                    statusResponse.data?._embedded?.records ||
+                                    statusResponse.data?.data;
+                    
+                    // Try download URL if present
+                    if (!reportData && statusResponse.data?.download_url) {
+                        const downloadResponse = await axios.get(statusResponse.data.download_url, {
+                            headers: { 'Authorization': `Basic ${auth}` },
+                            timeout: 30000
+                        });
+                        reportData = downloadResponse.data?.items || 
+                                   downloadResponse.data?.records || 
+                                   downloadResponse.data;
+                    }
+                    
+                    if (reportData && Array.isArray(reportData)) {
+                        console.log(`Async method returned ${reportData.length} records`);
+                        return reportData;
+                    }
+                }
+                
+                if (status === 'failed' || status === 'error' || status === 'FAILED') {
+                    console.log('Report generation failed');
+                    return null;
+                }
+                
+            } catch (statusError) {
+                console.error('Error checking report status:', statusError.message);
+            }
+        }
+        
+        console.log('Report timed out after', maxAttempts, 'attempts');
+        return null;
+        
+    } catch (error) {
+        console.error('Async method error:', error.response?.status, error.message);
+        return null;
+    }
+}
+
+// Helper function to fetch SMS data using sync method
+async function fetchSMSDataSync(auth, dateStart, dateEnd) {
+    try {
+        console.log('\nTrying SYNC Reports API (master account only)...');
+        
+        const syncUrl = 'https://api.nexmo.com/v2/reports/records';
+        const syncParams = {
+            account_id: config.vonage.accountId,
+            product: 'SMS',
+            date_start: `${dateStart}T00:00:00Z`,
+            date_end: `${dateEnd}T23:59:59Z`
+        };
+        
+        const syncResponse = await axios.get(syncUrl, {
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Accept': 'application/json'
+            },
+            params: syncParams,
+            timeout: 30000
+        });
+        
+        const records = syncResponse.data?.records || 
+                       syncResponse.data?._embedded?.records || 
+                       [];
+        
+        console.log(`Sync method returned ${records.length} records`);
+        return records;
+        
+    } catch (error) {
+        console.error('Sync method error:', error.response?.status, error.message);
+        
+        // Try without timezone
+        try {
             const syncParams = {
                 account_id: config.vonage.accountId,
                 product: 'SMS',
-                date_start: startDate,  // Simple YYYY-MM-DD format
-                date_end: endDate       // Simple YYYY-MM-DD format
+                date_start: dateStart,
+                date_end: dateEnd
             };
             
-            console.log('Sync URL:', syncUrl);
-            console.log('Sync params (no include_subaccounts):', JSON.stringify(syncParams, null, 2));
-            
-            const syncResponse = await axios.get(syncUrl, {
+            const syncResponse = await axios.get('https://api.nexmo.com/v2/reports/records', {
                 headers: {
                     'Authorization': `Basic ${auth}`,
                     'Accept': 'application/json'
@@ -709,103 +735,112 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
                 timeout: 30000
             });
             
-            console.log('Sync response status:', syncResponse.status);
+            const records = syncResponse.data?.records || [];
+            console.log(`Sync method (no TZ) returned ${records.length} records`);
+            return records;
             
-            const records = syncResponse.data?.records || syncResponse.data?._embedded?.records || [];
-            console.log(`Synchronous method returned ${records.length} records (master account only)`);
-            
-            if (records.length > 0) {
-                // Process records
-                records.forEach(record => {
-                    aggregatedUsage.total++;
-                    
-                    if (record.direction === 'outbound' || record.type === 'MT') {
-                        aggregatedUsage.outbound++;
-                    } else if (record.direction === 'inbound' || record.type === 'MO') {
-                        aggregatedUsage.inbound++;
-                    }
-                    
-                    const cost = parseFloat(record.price || record.total_price || 0);
-                    aggregatedUsage.totalCost += cost;
-                    
-                    const country = record.to_country || record.country || getCountryFromNumber(record.to);
-                    const countryName = getCountryName(country);
-                    
-                    if (!aggregatedUsage.byCountry[countryName]) {
-                        aggregatedUsage.byCountry[countryName] = {
-                            code: country,
-                            name: countryName,
-                            count: 0,
-                            cost: 0
-                        };
-                    }
-                    aggregatedUsage.byCountry[countryName].count++;
-                    aggregatedUsage.byCountry[countryName].cost += cost;
-                    
-                    const accountId = record.account_id || 'master';
-                    if (!aggregatedUsage.bySubAccount[accountId]) {
-                        aggregatedUsage.bySubAccount[accountId] = {
-                            accountId: accountId,
-                            accountName: 'Master Account',
-                            count: 0,
-                            cost: 0
-                        };
-                    }
-                    aggregatedUsage.bySubAccount[accountId].count++;
-                    aggregatedUsage.bySubAccount[accountId].cost += cost;
-                });
-                
-                console.log('SUCCESS: Synchronous Reports API worked (master account only)!');
-                return res.json({ 
-                    success: true, 
-                    data: aggregatedUsage,
-                    month: month,
-                    recordCount: aggregatedUsage.total,
-                    method: 'synchronous',
-                    note: 'Only master account data - use async for sub-accounts'
-                });
-            }
-            
-        } catch (syncError) {
-            console.error('Synchronous method failed:', syncError.response?.status);
-            console.error('Error details:', syncError.response?.data);
-            debugInfo.syncError = {
-                status: syncError.response?.status,
-                data: syncError.response?.data
-            };
+        } catch (retryError) {
+            console.error('Sync retry error:', retryError.response?.status);
+            return null;
+        }
+    }
+}
+
+// Helper function to fetch SMS data without date filter
+async function fetchSMSDataNoDate(auth) {
+    try {
+        console.log('\nTrying Reports API without date filter...');
+        
+        const response = await axios.get('https://api.nexmo.com/v2/reports/records', {
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Accept': 'application/json'
+            },
+            params: {
+                account_id: config.vonage.accountId,
+                product: 'SMS'
+            },
+            timeout: 30000
+        });
+        
+        const records = response.data?.records || [];
+        console.log(`No-date method returned ${records.length} records`);
+        return records;
+        
+    } catch (error) {
+        console.error('No-date method error:', error.response?.status);
+        return null;
+    }
+}
+
+// Generate empty usage data structure
+function generateEmptyUsageData() {
+    return {
+        total: 0,
+        outbound: 0,
+        inbound: 0,
+        byCountry: {},
+        bySubAccount: {},
+        byDate: {},
+        totalCost: 0
+    };
+}
+
+// Get historical SMS data (last 6 months)
+app.get('/api/vonage/usage/history', authenticateToken, async (req, res) => {
+    try {
+        const months = [];
+        const today = new Date();
+        
+        // Get last 6 months
+        for (let i = 5; i >= 0; i--) {
+            const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+            months.push(d.toISOString().slice(0, 7));
         }
         
-        console.log('\n=== BOTH METHODS FAILED ===');
-        console.log('Debug info:', JSON.stringify(debugInfo, null, 2));
+        const historyData = [];
         
-        return res.json({ 
-            success: true, 
-            data: aggregatedUsage,
-            month: month,
-            recordCount: 0,
-            message: 'No SMS data found. Check if there is SMS activity in this period.',
-            debug: debugInfo
+        for (const month of months) {
+            // Check cache
+            if (dataStore.smsCache[month]) {
+                historyData.push({
+                    month: month,
+                    data: dataStore.smsCache[month].data.data
+                });
+            } else {
+                // Fetch data for this month
+                req.query.month = month;
+                const data = await getSMSUsageData(req);
+                historyData.push({
+                    month: month,
+                    data: data
+                });
+            }
+        }
+        
+        res.json({
+            success: true,
+            data: historyData,
+            months: months
         });
         
     } catch (error) {
-        console.error('SMS usage endpoint crashed:', error.message);
-        
-        return res.json({ 
-            success: true, 
-            data: {
-                total: 0,
-                outbound: 0,
-                inbound: 0,
-                byCountry: {},
-                bySubAccount: {},
-                totalCost: 0
-            },
-            month: req.query.month || new Date().toISOString().slice(0, 7),
-            error: error.message,
-            message: 'Error fetching SMS data'
+        res.json({
+            success: false,
+            error: error.message
         });
     }
 });
+
+// Helper to get SMS data without sending response
+async function getSMSUsageData(req) {
+    const mockRes = {
+        json: (data) => data
+    };
+    
+    const result = await getSMSUsage(req, mockRes);
+    return result.data || generateEmptyUsageData();
+}
 
 // =================== BALANCE & CREDIT MANAGEMENT ===================
 
@@ -831,34 +866,6 @@ app.post('/api/vonage/balance-transfers', authenticateToken, async (req, res) =>
         res.json({ 
             success: true, 
             data: response.data 
-        });
-        
-    } catch (error) {
-        res.json({ 
-            success: false, 
-            error: error.response?.data?.error_text || error.message 
-        });
-    }
-});
-
-app.get('/api/vonage/balance-transfers', authenticateToken, async (req, res) => {
-    try {
-        const { start_date, end_date, subaccount } = req.query;
-        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/balance-transfers`;
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        
-        const response = await axios.get(url, {
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/json'
-            },
-            params: { start_date, end_date, subaccount },
-            timeout: 10000
-        });
-        
-        res.json({ 
-            success: true, 
-            data: response.data._embedded?.balance_transfers || []
         });
         
     } catch (error) {
@@ -930,17 +937,6 @@ app.get('/api/xero/auth', authenticateToken, (req, res) => {
     res.json({ authUrl });
 });
 
-app.get('/api/xero/callback', async (req, res) => {
-    try {
-        const { code, state } = req.query;
-        console.log('Received Xero callback with code:', code);
-        res.redirect('/?xero=connected');
-    } catch (error) {
-        console.error('Xero callback error:', error);
-        res.redirect('/?xero=error');
-    }
-});
-
 app.get('/api/xero/contacts', authenticateToken, async (req, res) => {
     try {
         const contacts = [
@@ -963,121 +959,37 @@ app.get('/api/customers', authenticateToken, (req, res) => {
     res.json({ success: true, data: customers });
 });
 
-app.post('/api/customers/link', authenticateToken, (req, res) => {
-    const { vonageAccount, xeroContact, customerName } = req.body;
+app.get('/api/billing/generate-invoices', authenticateToken, async (req, res) => {
+    const { month } = req.query;
     
-    const newCustomer = {
-        id: Date.now(),
-        name: customerName,
-        vonageAccount,
-        xeroContact,
-        createdAt: new Date().toISOString()
-    };
+    // Get SMS usage for the month
+    req.query.month = month;
+    const usageData = await getSMSUsageData(req);
     
-    dataStore.customers.push(newCustomer);
+    const invoices = [];
     
-    res.json({ success: true, data: newCustomer });
-});
-
-app.get('/api/products/mappings', authenticateToken, (req, res) => {
-    const mappings = [
-        { vonageProduct: 'SMS-AU', xeroItem: 'SMS Australia', type: 'SMS' },
-        { vonageProduct: 'SMS-US', xeroItem: 'SMS United States', type: 'SMS' },
-        { vonageProduct: 'NUM-AU', xeroItem: 'Phone Number AU', type: 'Number' }
-    ];
-    
-    res.json({ success: true, data: mappings });
-});
-
-app.get('/api/customers/:customerId/rates', authenticateToken, (req, res) => {
-    const rates = {
-        'SMS-AU': 0.08,
-        'SMS-US': 0.01,
-        'SMS-UK': 0.02,
-        'NUM-AU': 10.00,
-        'NUM-US': 5.00
-    };
-    
-    res.json({ success: true, data: rates });
-});
-
-app.post('/api/billing/generate-invoices', authenticateToken, (req, res) => {
-    const { month } = req.body;
-    
-    const invoices = [
-        {
-            id: 'INV-2025-001',
-            customer: 'Demo Customer',
-            amount: 0,
-            status: 'draft',
-            items: []
-        }
-    ];
-    
-    res.json({ success: true, data: invoices });
-});
-
-// =================== DEBUG ENDPOINT ===================
-
-app.get('/api/debug/test-all', authenticateToken, async (req, res) => {
-    const results = {};
-    
-    try {
-        // Test credentials
-        console.log('Testing with API Key:', config.vonage.apiKey ? 'SET' : 'NOT SET');
-        console.log('Testing with API Secret:', config.vonage.apiSecret ? 'SET' : 'NOT SET');
-        
-        // Test balance
-        try {
-            const balanceResponse = await axios.get('https://rest.nexmo.com/account/get-balance', {
-                params: {
-                    api_key: config.vonage.apiKey,
-                    api_secret: config.vonage.apiSecret
-                },
-                timeout: 10000
+    // Generate invoice for each sub-account
+    for (const [accountId, accountData] of Object.entries(usageData.bySubAccount || {})) {
+        if (accountData.count > 0) {
+            invoices.push({
+                id: `INV-${month}-${accountId}`,
+                customer: accountData.accountName,
+                accountId: accountId,
+                amount: accountData.cost,
+                smsCount: accountData.count,
+                status: 'draft',
+                month: month,
+                byCountry: accountData.byCountry
             });
-            results.balance = {
-                success: true,
-                value: balanceResponse.data.value
-            };
-        } catch (error) {
-            results.balance = {
-                success: false,
-                error: error.response?.status
-            };
         }
-        
-        // Test subaccounts
-        try {
-            const subAccounts = await fetchSubAccounts();
-            results.subaccounts = {
-                success: true,
-                count: subAccounts.length
-            };
-        } catch (error) {
-            results.subaccounts = {
-                success: false,
-                error: error.response?.status
-            };
-        }
-        
-        res.json({
-            success: true,
-            credentials: {
-                apiKey: config.vonage.apiKey ? 'SET' : 'NOT SET',
-                apiSecret: config.vonage.apiSecret ? 'SET' : 'NOT SET',
-                accountId: config.vonage.accountId
-            },
-            results: results
-        });
-        
-    } catch (error) {
-        res.json({
-            success: false,
-            error: error.message,
-            results: results
-        });
     }
+    
+    res.json({ 
+        success: true, 
+        data: invoices,
+        totalAmount: usageData.totalCost,
+        totalSMS: usageData.total
+    });
 });
 
 // =================== ERROR HANDLERS ===================
@@ -1115,29 +1027,17 @@ app.listen(PORT, () => {
     console.log('\n=== VONAGE API STATUS ===');
     if (!process.env.VONAGE_API_KEY) {
         console.error('❌ VONAGE_API_KEY: NOT SET - API will not work!');
-        console.error('   -> Set this in Render environment variables');
     } else {
         console.log('✅ VONAGE_API_KEY:', process.env.VONAGE_API_KEY);
     }
     
     if (!process.env.VONAGE_API_SECRET) {
         console.error('❌ VONAGE_API_SECRET: NOT SET - API will not work!');
-        console.error('   -> Set this in Render environment variables');
     } else {
         console.log('✅ VONAGE_API_SECRET: ***hidden***');
     }
     
     console.log('   Account ID:', config.vonage.accountId);
-    console.log('   Base URL:', config.vonage.baseUrl);
-    console.log('   API URL:', config.vonage.apiBaseUrl);
-    
-    // Check Xero
-    console.log('\n=== XERO API STATUS ===');
-    if (!process.env.XERO_CLIENT_ID) {
-        console.warn('⚠️  XERO_CLIENT_ID: Not configured');
-    } else {
-        console.log('✅ XERO_CLIENT_ID: Configured');
-    }
     
     console.log('\n========================================\n');
 });
