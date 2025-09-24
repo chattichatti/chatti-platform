@@ -265,12 +265,41 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
 
 // Test Reports API - We know this returns 403
 app.get('/api/vonage/test-reports', authenticateToken, async (req, res) => {
-    res.json({ 
-        success: false, 
-        error: '403 - Forbidden',
-        message: 'Reports API v2 is not enabled for your account',
-        solution: 'Using Search Messages API instead for SMS data'
-    });
+    // Actually test it to show the exact error
+    try {
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+        const testDate = new Date().toISOString().slice(0, 10);
+        
+        const response = await axios.get('https://api.nexmo.com/v2/reports/records', {
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/json'
+            },
+            params: {
+                account_id: config.vonage.accountId,
+                product: 'SMS',
+                date_start: `${testDate}T00:00:00Z`,
+                date_end: `${testDate}T23:59:59Z`,
+                include_subaccounts: true
+            },
+            timeout: 5000
+        });
+        
+        res.json({ 
+            success: true,
+            message: 'Reports API v2 is working!',
+            data: response.data
+        });
+        
+    } catch (error) {
+        res.json({ 
+            success: false, 
+            error: error.response?.status || error.message,
+            errorDetail: error.response?.data,
+            message: 'Reports API v2 is not accessible. Contact Vonage to enable it.',
+            solution: 'Tell Vonage: "Enable Reports API v2 for Partner account 4c42609f with include_subaccounts support"'
+        });
+    }
 });
 
 // =================== VONAGE SUBACCOUNTS API - FIXED TO EXTRACT 267 ACCOUNTS ===================
