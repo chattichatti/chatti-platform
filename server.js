@@ -1,5 +1,5 @@
 // server.js - Complete Backend Server for Chatti Platform with Vonage Reseller Integration
-// Version: Updated to match Vonage Support's successful request format
+// Version: Individual sub-account querying (one at a time)
 
 const express = require('express');
 const cors = require('cors');
@@ -139,7 +139,6 @@ async function fetchSubAccounts() {
 
 function generateVonageJWT() {
     if (!config.vonage.applicationId || !config.vonage.privateKey) {
-        console.warn('Cannot generate JWT - missing applicationId or privateKey');
         return null;
     }
     
@@ -160,155 +159,6 @@ function generateVonageJWT() {
     } catch (error) {
         console.error('Error generating Vonage JWT:', error.message);
         return null;
-    }
-}
-
-// =============== Reports API - MATCHING VONAGE SUPPORT'S FORMAT ===============
-
-async function createAsyncReport(headers, dateStart, dateEnd) {
-    // Match exactly what Vonage support used
-    const body = {
-        account_id: config.vonage.accountId,  // Include account_id
-        product: "SMS",
-        include_subaccounts: "true",  // String, not boolean
-        direction: "outbound",
-        date_start: `${dateStart}T00:00:00Z`,
-        date_end: `${dateEnd}T23:59:59Z`,
-        callback_url: null  // Set to null or your webhook URL
-    };
-    
-    console.log('Creating async report with body:', JSON.stringify(body, null, 2));
-    
-    const url = 'https://api.nexmo.com/v2/reports';
-    
-    try {
-        const r = await axios.post(url, body, { headers, timeout: 30000 });
-        const requestId = r.data?.request_id || r.data?.id;
-        
-        if (requestId) {
-            console.log(`Async report created successfully with request_id: ${requestId}`);
-            return { type: 'async', requestId };
-        } else if (r.data?.records) {
-            // Sometimes returns synchronous data directly
-            console.log('Got synchronous response with records');
-            return { type: 'sync', data: r.data.records };
-        }
-        
-        console.log('Unexpected response:', JSON.stringify(r.data, null, 2));
-        throw new Error('No request_id or records in response');
-    } catch (error) {
-        console.error('Create async report error:', error.response?.status, error.response?.data);
-        throw error;
-    }
-}
-
-async function pollAsyncReport(headers, requestId, timeoutMs = 10 * 60 * 1000) {
-    const statusUrl = `https://api.nexmo.com/v2/reports/${requestId}`;
-    const start = Date.now();
-    let attempts = 0;
-    
-    while (Date.now() - start < timeoutMs) {
-        await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds between polls
-        attempts++;
-        
-        try {
-            const s = await axios.get(statusUrl, { headers, timeout: 30000 });
-            const state = s.data?.status || s.data?.state || s.data?.request_status;
-            
-            console.log(`Poll attempt ${attempts}: Status = ${state}`);
-            
-            if (/completed|complete|success|succeeded/i.test(state)) {
-                // Check for download URL or embedded data
-                const downloadUrl = s.data?.download_url || s.data?.links?.download || s.data?._links?.download?.href;
-                const records = s.data?.records || s.data?.items;
-                
-                if (downloadUrl) {
-                    console.log('Report completed with download URL');
-                    return { type: 'download', url: downloadUrl };
-                } else if (records) {
-                    console.log('Report completed with embedded data');
-                    return { type: 'embedded', data: records };
-                }
-                
-                console.log('Report completed but no data found in response');
-                console.log('Response structure:', JSON.stringify(s.data, null, 2));
-            }
-            
-            if (/failed|error/i.test(state)) {
-                throw new Error(`Async report failed: ${state} - ${s.data?.error || ''}`);
-            }
-        } catch (pollError) {
-            if (pollError.response?.status === 404) {
-                console.error('Report not found - may have expired or invalid request_id');
-                throw new Error('Report not found');
-            }
-            if (!pollError.message?.includes('Async report failed')) {
-                console.error('Poll error:', pollError.message);
-            }
-            throw pollError;
-        }
-    }
-    
-    throw new Error('Async report timed out after ' + attempts + ' attempts');
-}
-
-async function downloadAndExtractZip(headers, url) {
-    console.log('Downloading ZIP from:', url);
-    
-    try {
-        const dl = await axios.get(url, { 
-            headers, 
-            responseType: 'arraybuffer', 
-            timeout: 180000 // 3 minutes for large downloads
-        });
-        
-        const zip = new AdmZip(Buffer.from(dl.data));
-        const entries = zip.getEntries();
-        
-        console.log(`ZIP contains ${entries.length} files`);
-        
-        let records = [];
-        
-        for (const e of entries) {
-            const name = e.entryName.toLowerCase();
-            const text = e.getData().toString('utf8');
-            
-            console.log(`Processing file: ${e.entryName}`);
-            
-            if (name.endsWith('.json')) {
-                try {
-                    const parsed = JSON.parse(text);
-                    const arr = parsed.records || parsed.items || parsed.data || parsed;
-                    if (Array.isArray(arr)) {
-                        records.push(...arr);
-                        console.log(`Extracted ${arr.length} records from JSON`);
-                    }
-                } catch (jsonError) {
-                    console.error('Failed to parse JSON:', jsonError.message);
-                }
-            } else if (name.endsWith('.csv')) {
-                // Simple CSV parser
-                const lines = text.trim().split(/\r?\n/);
-                if (lines.length > 1) {
-                    const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
-                    
-                    for (let i = 1; i < lines.length; i++) {
-                        const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''));
-                        const record = {};
-                        headers.forEach((h, idx) => {
-                            record[h] = values[idx];
-                        });
-                        records.push(record);
-                    }
-                    console.log(`Extracted ${lines.length - 1} records from CSV`);
-                }
-            }
-        }
-        
-        return records;
-    } catch (downloadError) {
-        console.error('Download/extract error:', downloadError.message);
-        throw downloadError;
     }
 }
 
@@ -406,10 +256,95 @@ function processRecords(records) {
     return aggregated;
 }
 
-// Fallback synchronous method (master account only)
-async function fetchSyncReportData(headers, dateStart, dateEnd) {
+// =============== INDIVIDUAL SUB-ACCOUNT QUERYING ===============
+
+async function fetchSubAccountData(headers, subAccountApiKey, dateStart, dateEnd) {
     try {
-        console.log('\n=== FALLBACK: Trying synchronous Reports API (master only) ===');
+        const body = {
+            account_id: subAccountApiKey,  // Query specific sub-account
+            product: "SMS",
+            date_start: `${dateStart}T00:00:00Z`,
+            date_end: `${dateEnd}T23:59:59Z`,
+            direction: "outbound"
+        };
+        
+        const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
+            headers,
+            timeout: 10000  // 10 second timeout per sub-account
+        });
+        
+        return response.data?.records || [];
+    } catch (error) {
+        // Silently fail for individual sub-accounts
+        return [];
+    }
+}
+
+async function fetchAllSubAccountsData(headers, dateStart, dateEnd) {
+    console.log('\n=== FETCHING DATA FROM INDIVIDUAL SUB-ACCOUNTS ===');
+    
+    // Get list of sub-accounts
+    const subAccounts = await fetchSubAccounts();
+    
+    if (subAccounts.length === 0) {
+        console.log('No sub-accounts found');
+        return [];
+    }
+    
+    console.log(`Found ${subAccounts.length} sub-accounts to query`);
+    
+    let allRecords = [];
+    let successCount = 0;
+    let failCount = 0;
+    const batchSize = 10; // Process 10 accounts at a time to avoid overwhelming the API
+    
+    // Process in batches
+    for (let i = 0; i < subAccounts.length; i += batchSize) {
+        const batch = subAccounts.slice(i, Math.min(i + batchSize, subAccounts.length));
+        console.log(`Processing batch ${Math.floor(i/batchSize) + 1} (accounts ${i + 1}-${Math.min(i + batchSize, subAccounts.length)})`);
+        
+        // Process batch in parallel
+        const batchPromises = batch.map(async (subAccount) => {
+            try {
+                const records = await fetchSubAccountData(headers, subAccount.api_key, dateStart, dateEnd);
+                if (records.length > 0) {
+                    successCount++;
+                    console.log(`✓ ${subAccount.api_key}: ${records.length} records`);
+                    return records;
+                } else {
+                    console.log(`○ ${subAccount.api_key}: No data`);
+                    return [];
+                }
+            } catch (error) {
+                failCount++;
+                console.log(`✗ ${subAccount.api_key}: Failed`);
+                return [];
+            }
+        });
+        
+        const batchResults = await Promise.all(batchPromises);
+        batchResults.forEach(records => {
+            allRecords = allRecords.concat(records);
+        });
+        
+        // Small delay between batches to avoid rate limiting
+        if (i + batchSize < subAccounts.length) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    }
+    
+    console.log(`\n=== SUMMARY ===`);
+    console.log(`Successful queries: ${successCount}/${subAccounts.length}`);
+    console.log(`Failed queries: ${failCount}/${subAccounts.length}`);
+    console.log(`Total records collected: ${allRecords.length}`);
+    
+    return allRecords;
+}
+
+// Master account data fetch
+async function fetchMasterAccountData(headers, dateStart, dateEnd) {
+    try {
+        console.log('\n=== FETCHING MASTER ACCOUNT DATA ===');
         
         const body = {
             account_id: config.vonage.accountId,
@@ -417,7 +352,6 @@ async function fetchSyncReportData(headers, dateStart, dateEnd) {
             date_start: `${dateStart}T00:00:00Z`,
             date_end: `${dateEnd}T23:59:59Z`,
             direction: "outbound"
-            // NO include_subaccounts for sync to avoid 403
         };
         
         const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
@@ -425,11 +359,12 @@ async function fetchSyncReportData(headers, dateStart, dateEnd) {
             timeout: 30000
         });
         
-        console.log(`Sync response: ${response.data?.records?.length || 0} records`);
-        return response.data?.records || [];
+        const records = response.data?.records || [];
+        console.log(`Master account records: ${records.length}`);
+        return records;
         
     } catch (error) {
-        console.error('Sync method error:', error.response?.status, error.response?.data || error.message);
+        console.error('Master account query failed:', error.response?.status);
         return [];
     }
 }
@@ -455,7 +390,6 @@ app.post('/api/login', async (req, res) => {
             });
         }
         
-        // Simple hash comparison
         if (passHash !== user.passwordHash) {
             return res.status(401).json({ 
                 success: false, 
@@ -578,7 +512,7 @@ app.get('/api/vonage/subaccounts/:id/sms-usage', authenticateToken, async (req, 
 
 // =================== SMS USAGE ENDPOINTS ===================
 
-// SMS usage endpoint - MATCHING VONAGE SUPPORT'S FORMAT
+// SMS usage endpoint - QUERIES EACH SUB-ACCOUNT INDIVIDUALLY
 app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
     try {
         const { month = new Date().toISOString().slice(0, 7) } = req.query;
@@ -599,9 +533,8 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
         
         console.log(`\n=== SMS USAGE REQUEST FOR ${month} ===`);
         console.log(`Date range: ${dateStart} to ${dateEnd}`);
-        console.log(`Account ID: ${config.vonage.accountId}`);
         
-        // Try JWT first, fall back to Basic auth
+        // Prepare headers - use JWT if available, otherwise Basic auth
         let headers;
         const jwtToken = generateVonageJWT();
         
@@ -613,7 +546,7 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
                 'Accept': 'application/json'
             };
         } else {
-            console.log('Using Basic authentication (JWT not available)');
+            console.log('Using Basic authentication');
             headers = {
                 'Authorization': `Basic ${Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64')}`,
                 'Content-Type': 'application/json',
@@ -621,45 +554,21 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
             };
         }
         
-        // Use async flow matching Vonage support's format
-        let records = [];
-        try {
-            console.log('=== ASYNC REPORT: Using Vonage Support verified format ===');
-            
-            const createResult = await createAsyncReport(headers, dateStart, dateEnd);
-            
-            if (createResult.type === 'sync') {
-                // Got synchronous data directly
-                console.log('Got synchronous response directly');
-                records = createResult.data;
-            } else {
-                // Got async request_id, need to poll
-                console.log(`Polling for async report: ${createResult.requestId}`);
-                const pollResult = await pollAsyncReport(headers, createResult.requestId);
-                
-                if (pollResult.type === 'download') {
-                    records = await downloadAndExtractZip(headers, pollResult.url);
-                } else if (pollResult.type === 'embedded') {
-                    records = pollResult.data;
-                }
-            }
-            
-            console.log(`Total records retrieved: ${records.length}`);
-            
-        } catch (asyncError) {
-            console.error('Async flow failed:', asyncError.message);
-            
-            if (asyncError.response?.data) {
-                console.error('Error details:', JSON.stringify(asyncError.response.data, null, 2));
-            }
-            
-            // Last resort: master-only sync (won't include subaccounts)
-            console.log('Falling back to synchronous method (master account only)...');
-            records = await fetchSyncReportData(headers, dateStart, dateEnd);
-        }
+        // Fetch data from master account and all sub-accounts individually
+        let allRecords = [];
+        
+        // Get master account data
+        const masterRecords = await fetchMasterAccountData(headers, dateStart, dateEnd);
+        allRecords = allRecords.concat(masterRecords);
+        
+        // Get all sub-accounts data (one by one)
+        const subAccountRecords = await fetchAllSubAccountsData(headers, dateStart, dateEnd);
+        allRecords = allRecords.concat(subAccountRecords);
+        
+        console.log(`\nTotal records from all accounts: ${allRecords.length}`);
         
         // Process and return the records
-        const aggregatedData = processRecords(records);
+        const aggregatedData = processRecords(allRecords);
         
         const result = {
             success: true,
@@ -667,7 +576,8 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
             month: month,
             dateRange: `${dateStart} to ${dateEnd}`,
             recordCount: aggregatedData.total,
-            method: records.length > 0 ? 'async-vonage-format' : 'fallback'
+            method: 'individual-subaccounts',
+            accountsQueried: subAccountsCache.data.length + 1  // sub-accounts + master
         };
         
         // Cache the result if we got data
@@ -705,7 +615,6 @@ app.get('/api/vonage/dashboard/summary', authenticateToken, async (req, res) => 
         const dateStart = `${year}-${String(month).padStart(2, '0')}-01`;
         const dateEnd = new Date().toISOString().slice(0, 10);
         
-        // Try JWT first, fall back to Basic auth
         let headers;
         const jwtToken = generateVonageJWT();
         
@@ -721,27 +630,15 @@ app.get('/api/vonage/dashboard/summary', authenticateToken, async (req, res) => 
             };
         }
         
-        let records = [];
-        try {
-            const createResult = await createAsyncReport(headers, dateStart, dateEnd);
-            
-            if (createResult.type === 'sync') {
-                records = createResult.data;
-            } else {
-                const pollResult = await pollAsyncReport(headers, createResult.requestId);
-                
-                if (pollResult.type === 'download') {
-                    records = await downloadAndExtractZip(headers, pollResult.url);
-                } else if (pollResult.type === 'embedded') {
-                    records = pollResult.data;
-                }
-            }
-        } catch (e) {
-            console.error('Dashboard async error:', e.message);
-            records = await fetchSyncReportData(headers, dateStart, dateEnd);
-        }
+        // Get data from all accounts
+        let allRecords = [];
+        const masterRecords = await fetchMasterAccountData(headers, dateStart, dateEnd);
+        allRecords = allRecords.concat(masterRecords);
         
-        const data = processRecords(records);
+        const subAccountRecords = await fetchAllSubAccountsData(headers, dateStart, dateEnd);
+        allRecords = allRecords.concat(subAccountRecords);
+        
+        const data = processRecords(allRecords);
         
         const summary = {
             success: true,
@@ -802,15 +699,9 @@ app.listen(PORT, () => {
     }
     
     if (!process.env.VONAGE_APPLICATION_ID) {
-        console.warn('⚠️  VONAGE_APPLICATION_ID: Not set (will use Basic auth)');
+        console.log('ℹ️  VONAGE_APPLICATION_ID: Not set (using Basic auth)');
     } else {
         console.log('✅ VONAGE_APPLICATION_ID: Configured');
-    }
-    
-    if (!process.env.VONAGE_PRIVATE_KEY) {
-        console.warn('⚠️  VONAGE_PRIVATE_KEY: Not set (will use Basic auth)');
-    } else {
-        console.log('✅ VONAGE_PRIVATE_KEY: Configured');
     }
     
     console.log('\n========================================\n');
