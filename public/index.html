@@ -675,16 +675,17 @@
         }
 
         // Auto-login functionality (your original working method)
-        async function autoLogin() {
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        email: 'admin@chatti.com',
-                        password: 'changeme123'  // Your demo password
-                    })
-                });
+async function autoLogin() {
+  const email = 'admin@chatti.com';
+  const passHash = '38fd8d2a7a50331e65bd8daf6637f427c7ed9a32cc0940833f2c87f0db918259'; // <-- Put your hash here
+  
+  const r = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, passHash })
+  });
+  // ... rest of function
+}
                 
                 const data = await response.json();
                 
