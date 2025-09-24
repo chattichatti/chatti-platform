@@ -1,5 +1,5 @@
 // server.js - Complete Backend Server for Chatti Platform with Vonage Reseller Integration
-// Version: Working implementation with proper authentication
+// Version: Working implementation with proper authentication and async Reports API
 
 const express = require('express');
 const cors = require('cors');
@@ -8,6 +8,7 @@ const path = require('path');
 const dotenv = require('dotenv');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
+const AdmZip = require('adm-zip'); // Added for ZIP file handling
 
 // Load environment variables
 dotenv.config();
@@ -186,6 +187,199 @@ function authenticateToken(req, res, next) {
     });
 }
 
+// =================== SMS DATA PROCESSING ===================
+
+function processRecords(records) {
+    const aggregated = {
+        total: 0,
+        outbound: 0,
+        inbound: 0,
+        byCountry: {},
+        bySubAccount: {},
+        byDate: {},
+        totalCost: 0
+    };
+    
+    if (!Array.isArray(records)) return aggregated;
+    
+    for (const record of records) {
+        aggregated.total++;
+        
+        if (record.direction === 'outbound' || record.type === 'MT') {
+            aggregated.outbound++;
+        } else {
+            aggregated.inbound++;
+        }
+        
+        const cost = parseFloat(record.price || record.total_price || record.cost || 0);
+        aggregated.totalCost += cost;
+        
+        const country = record.to_country || record.country || getCountryFromNumber(record.to);
+        const countryName = getCountryName(country);
+        
+        if (!aggregated.byCountry[countryName]) {
+            aggregated.byCountry[countryName] = {
+                code: country,
+                name: countryName,
+                count: 0,
+                cost: 0
+            };
+        }
+        aggregated.byCountry[countryName].count++;
+        aggregated.byCountry[countryName].cost += cost;
+        
+        const accountId = record.account_id || record.api_key || 'master';
+        const accountName = record.account_name || accountId;
+        
+        if (!aggregated.bySubAccount[accountId]) {
+            aggregated.bySubAccount[accountId] = {
+                accountId: accountId,
+                accountName: accountName,
+                count: 0,
+                cost: 0
+            };
+        }
+        aggregated.bySubAccount[accountId].count++;
+        aggregated.bySubAccount[accountId].cost += cost;
+        
+        const messageDate = record.date_start || record.timestamp || record.created_at;
+        if (messageDate) {
+            const dateKey = messageDate.slice(0, 10);
+            if (!aggregated.byDate[dateKey]) {
+                aggregated.byDate[dateKey] = { count: 0, cost: 0 };
+            }
+            aggregated.byDate[dateKey].count++;
+            aggregated.byDate[dateKey].cost += cost;
+        }
+    }
+    
+    return aggregated;
+}
+
+// =================== ASYNC REPORTS WITH ZIP HANDLING ===================
+
+async function fetchAsyncReportData(headers, dateStart, dateEnd) {
+    try {
+        console.log('\n=== ASYNC REPORT PROCESS (Per Vonage Documentation) ===');
+        
+        // Step 1: Create async report
+        const createBody = {
+            product: 'SMS',
+            account_id: config.vonage.accountId,
+            date_start: `${dateStart}T00:00:00Z`,
+            date_end: `${dateEnd}T23:59:59Z`,
+            direction: 'outbound',
+            include_subaccounts: true,
+            include_message: false,  // Exclude message content for privacy
+            status: 'delivered'       // Only delivered messages
+        };
+        
+        console.log('Step 1: Creating async report with payload:', JSON.stringify(createBody, null, 2));
+        
+        const createResponse = await axios.post(
+            'https://api.nexmo.com/v2/reports/async',
+            createBody,
+            { headers, timeout: 30000 }
+        );
+        
+        const requestId = createResponse.data?.request_id;
+        if (!requestId) {
+            console.error('No request_id received:', createResponse.data);
+            return [];
+        }
+        
+        console.log(`Step 1 Success: Request ID = ${requestId}`);
+        
+        // Step 2: Poll for completion
+        console.log('Step 2: Polling for report completion...');
+        const statusUrl = `https://api.nexmo.com/v2/reports/async/${requestId}`;
+        let attempts = 0;
+        const maxAttempts = 60; // 5 minutes max (5 seconds × 60)
+        
+        while (attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+            attempts++;
+            
+            const statusResponse = await axios.get(statusUrl, { headers, timeout: 30000 });
+            const status = statusResponse.data?.status;
+            
+            console.log(`Poll attempt ${attempts}: Status = ${status}`);
+            
+            if (status === 'completed' || status === 'COMPLETED') {
+                const downloadUrl = statusResponse.data?.download_url;
+                const receiveTime = statusResponse.data?.receive_time;
+                
+                if (downloadUrl) {
+                    console.log(`Step 2 Success: Report ready at ${receiveTime}`);
+                    console.log(`Download URL: ${downloadUrl}`);
+                    
+                    // Step 3: Download the ZIP file
+                    console.log('Step 3: Downloading ZIP file...');
+                    const downloadResponse = await axios.get(downloadUrl, {
+                        headers,
+                        responseType: 'arraybuffer',
+                        timeout: 120000 // 2 minutes for download
+                    });
+                    
+                    // Step 4: Extract and parse the ZIP
+                    console.log('Step 4: Extracting ZIP contents...');
+                    const zip = new AdmZip(Buffer.from(downloadResponse.data));
+                    const zipEntries = zip.getEntries();
+                    
+                    let allRecords = [];
+                    
+                    zipEntries.forEach(entry => {
+                        if (entry.entryName.endsWith('.json')) {
+                            const jsonContent = entry.getData().toString('utf8');
+                            const data = JSON.parse(jsonContent);
+                            
+                            // Handle different possible data structures
+                            if (data.records) {
+                                allRecords = allRecords.concat(data.records);
+                            } else if (Array.isArray(data)) {
+                                allRecords = allRecords.concat(data);
+                            } else if (data.items) {
+                                allRecords = allRecords.concat(data.items);
+                            }
+                            
+                            console.log(`Extracted ${allRecords.length} records from ${entry.entryName}`);
+                        }
+                    });
+                    
+                    console.log(`Step 4 Success: Total records extracted = ${allRecords.length}`);
+                    return allRecords;
+                } else {
+                    // No download URL, check if data is embedded
+                    if (statusResponse.data?.records) {
+                        console.log('Data embedded in response (not ZIP)');
+                        return statusResponse.data.records;
+                    }
+                }
+            } else if (status === 'failed' || status === 'FAILED' || status === 'error') {
+                console.error('Report generation failed:', statusResponse.data);
+                return [];
+            }
+        }
+        
+        console.error('Timeout: Report did not complete within 5 minutes');
+        return [];
+        
+    } catch (error) {
+        console.error('Async report error:', error.response?.status, error.response?.data || error.message);
+        
+        // If async fails, provide detailed error for Vonage support
+        if (error.response?.data) {
+            console.error('\n=== ERROR DETAILS FOR VONAGE SUPPORT ===');
+            console.error('Status:', error.response.status);
+            console.error('Response:', JSON.stringify(error.response.data, null, 2));
+            console.error('Request Headers:', JSON.stringify(headers, null, 2));
+            console.error('=========================================\n');
+        }
+        
+        return [];
+    }
+}
+
 // =================== FRONTEND ROUTES ===================
 
 app.get('/', (req, res) => {
@@ -328,107 +522,18 @@ app.get('/api/vonage/subaccounts/:id/sms-usage', authenticateToken, async (req, 
     }
 });
 
-// =================== SMS DATA PROCESSING ===================
-
-function processRecords(records) {
-    const aggregated = {
-        total: 0,
-        outbound: 0,
-        inbound: 0,
-        byCountry: {},
-        bySubAccount: {},
-        byDate: {},
-        totalCost: 0
-    };
-    
-    if (!Array.isArray(records)) return aggregated;
-    
-    for (const record of records) {
-        aggregated.total++;
-        
-        if (record.direction === 'outbound' || record.type === 'MT') {
-            aggregated.outbound++;
-        } else {
-            aggregated.inbound++;
-        }
-        
-        const cost = parseFloat(record.price || record.total_price || record.cost || 0);
-        aggregated.totalCost += cost;
-        
-        const country = record.to_country || record.country || getCountryFromNumber(record.to);
-        const countryName = getCountryName(country);
-        
-        if (!aggregated.byCountry[countryName]) {
-            aggregated.byCountry[countryName] = {
-                code: country,
-                name: countryName,
-                count: 0,
-                cost: 0
-            };
-        }
-        aggregated.byCountry[countryName].count++;
-        aggregated.byCountry[countryName].cost += cost;
-        
-        const accountId = record.account_id || record.api_key || 'master';
-        const accountName = record.account_name || accountId;
-        
-        if (!aggregated.bySubAccount[accountId]) {
-            aggregated.bySubAccount[accountId] = {
-                accountId: accountId,
-                accountName: accountName,
-                count: 0,
-                cost: 0
-            };
-        }
-        aggregated.bySubAccount[accountId].count++;
-        aggregated.bySubAccount[accountId].cost += cost;
-        
-        const messageDate = record.date_start || record.timestamp || record.created_at;
-        if (messageDate) {
-            const dateKey = messageDate.slice(0, 10);
-            if (!aggregated.byDate[dateKey]) {
-                aggregated.byDate[dateKey] = { count: 0, cost: 0 };
-            }
-            aggregated.byDate[dateKey].count++;
-            aggregated.byDate[dateKey].cost += cost;
-        }
-    }
-    
-    return aggregated;
-}
-
 // =================== SMS USAGE ENDPOINTS ===================
 
-// Helper to fetch SMS data
-async function fetchSMSData(headers, dateStart, dateEnd) {
-    try {
-        const body = {
-            product: 'SMS',
-            date_start: `${dateStart}T00:00:00Z`,
-            date_end: `${dateEnd}T23:59:59Z`,
-            direction: 'outbound'
-        };
-        
-        const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
-            headers,
-            timeout: 30000
-        });
-        
-        return response.data?.records || [];
-    } catch (error) {
-        console.error('Error fetching SMS data:', error.response?.status);
-        return [];
-    }
-}
-
-// Get SMS usage
+// Updated SMS usage endpoint with async Reports API
 app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
     try {
         const { month = new Date().toISOString().slice(0, 7) } = req.query;
         
+        // Check cache first
         const cacheKey = `sms_${month}`;
         if (dataStore.smsCache[cacheKey] && 
             (Date.now() - dataStore.smsCache[cacheKey].timestamp) < 5 * 60 * 1000) {
+            console.log('Returning cached data for', month);
             return res.json(dataStore.smsCache[cacheKey].data);
         }
         
@@ -438,8 +543,9 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
         const lastDay = new Date(year, monthNum, 0).getDate();
         const dateEnd = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
         
-        console.log(`SMS usage request for ${month}`);
+        console.log(`\n=== SMS USAGE REQUEST FOR ${month} ===`);
         
+        // Prepare authentication
         const jwtToken = generateVonageJWT();
         const headers = jwtToken ? {
             'Authorization': `Bearer ${jwtToken}`,
@@ -447,31 +553,56 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
             'Accept': 'application/json'
         } : {
             'Authorization': `Basic ${Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64')}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
         };
         
-        const records = await fetchSMSData(headers, dateStart, dateEnd);
-        const aggregatedData = processRecords(records);
+        // Use async method as recommended by Vonage
+        const records = await fetchAsyncReportData(headers, dateStart, dateEnd);
         
-        const result = {
+        if (records && records.length > 0) {
+            const aggregatedData = processRecords(records);
+            
+            const result = {
+                success: true,
+                data: aggregatedData,
+                month: month,
+                dateRange: `${dateStart} to ${dateEnd}`,
+                recordCount: aggregatedData.total,
+                method: 'async-with-download'
+            };
+            
+            // Cache the result
+            dataStore.smsCache[cacheKey] = {
+                data: result,
+                timestamp: Date.now()
+            };
+            
+            return res.json(result);
+        }
+        
+        // If async fails, return empty data with instructions
+        res.json({
             success: true,
-            data: aggregatedData,
+            data: {
+                total: 0,
+                outbound: 0,
+                inbound: 0,
+                byCountry: {},
+                bySubAccount: {},
+                byDate: {},
+                totalCost: 0
+            },
             month: month,
-            dateRange: `${dateStart} to ${dateEnd}`,
-            recordCount: aggregatedData.total,
-            accountCount: Object.keys(aggregatedData.bySubAccount).length
-        };
-        
-        dataStore.smsCache[cacheKey] = {
-            data: result,
-            timestamp: Date.now()
-        };
-        
-        res.json(result);
+            message: 'No SMS data retrieved. Check Render logs for details.',
+            support: 'If this persists, share the error details from Render logs with Vonage support.',
+            apiKeyUsed: config.vonage.apiKey,
+            dateQueried: `${dateStart} to ${dateEnd}`
+        });
         
     } catch (error) {
-        console.error('SMS usage error:', error.message);
-        res.json({
+        console.error('SMS usage endpoint error:', error);
+        res.status(500).json({
             success: false,
             error: error.message,
             data: processRecords([])
@@ -510,7 +641,7 @@ app.get('/api/vonage/dashboard/summary', authenticateToken, async (req, res) => 
             'Content-Type': 'application/json'
         };
         
-        const records = await fetchSMSData(headers, dateStart, dateEnd);
+        const records = await fetchAsyncReportData(headers, dateStart, dateEnd);
         const data = processRecords(records);
         
         const summary = {
