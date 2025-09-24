@@ -419,7 +419,7 @@
     <!-- Login Screen -->
     <div class="login-container" id="loginScreen">
         <div class="login-box">
-            <h1>🌐 Chatti Platform</h1>
+            <h1>📡 Chatti Platform</h1>
             <p style="text-align: center; color: #6c757d; margin-bottom: 30px;">
                 Telecommunications Management System
             </p>
@@ -625,14 +625,20 @@
         let authToken = null;
         let currentUser = null;
 
-        // Auto-login on page load (your original working method)
+        // Helper function to hash password in browser
+        async function sha256Hex(s) {
+            const enc = new TextEncoder().encode(s);
+            const buf = await crypto.subtle.digest('SHA-256', enc);
+            return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join('');
+        }
+
+        // Auto-login on page load
         window.addEventListener('DOMContentLoaded', async () => {
             await autoLogin();
         });
 
         // API Helper with automatic authentication
         async function apiCall(url, options = {}) {
-            // Make sure we have a token
             if (!authToken) {
                 console.error('No auth token available');
                 return { success: false, error: 'Not authenticated' };
@@ -646,7 +652,6 @@
                 ...options
             };
 
-            // If options has headers, merge them
             if (options.headers) {
                 defaultOptions.headers = { ...defaultOptions.headers, ...options.headers };
             }
@@ -655,10 +660,8 @@
                 const response = await fetch(url, defaultOptions);
                 
                 if (response.status === 401 || response.status === 403) {
-                    // Token expired or invalid - try to auto-login again
                     console.log('Token expired, attempting auto-login...');
                     await autoLogin();
-                    // Retry the request with new token
                     if (authToken) {
                         defaultOptions.headers.Authorization = `Bearer ${authToken}`;
                         const retryResponse = await fetch(url, defaultOptions);
@@ -674,18 +677,17 @@
             }
         }
 
-        // Auto-login functionality (your original working method)
-async function autoLogin() {
-  const email = 'admin@chatti.com';
-  const passHash = '38fd8d2a7a50331e65bd8daf6637f427c7ed9a32cc0940833f2c87f0db918259'; // <-- Put your hash here
-  
-  const r = await fetch('/api/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, passHash })
-  });
-  // ... rest of function
-}
+        // Auto-login functionality
+        async function autoLogin() {
+            const email = 'admin@chatti.com';
+            const passHash = '38fd8d2a7a50331e65bd8daf6637f427c7ed9a32cc0940833f2c87f0db918259';
+            
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, passHash })
+                });
                 
                 const data = await response.json();
                 
@@ -716,10 +718,13 @@ async function autoLogin() {
             const password = document.getElementById('password').value;
             
             try {
+                // Hash the password before sending
+                const passHash = await sha256Hex(password);
+                
                 const response = await fetch('/api/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password })
+                    body: JSON.stringify({ email, passHash })
                 });
                 
                 const data = await response.json();
@@ -767,19 +772,16 @@ async function autoLogin() {
 
         // Tab switching
         function switchTab(tabName) {
-            // Update nav tabs
             document.querySelectorAll('.nav-tab').forEach(tab => {
                 tab.classList.remove('active');
             });
             event.target.classList.add('active');
             
-            // Update content
             document.querySelectorAll('.tab-content').forEach(content => {
                 content.classList.remove('active');
             });
             document.getElementById(`${tabName}-tab`).classList.add('active');
             
-            // Load tab data
             switch(tabName) {
                 case 'dashboard':
                     loadDashboard();
@@ -802,19 +804,16 @@ async function autoLogin() {
             }
         }
 
-        // Load Dashboard with automatic authentication
+        // Load Dashboard
         async function loadDashboard() {
             try {
-                // Load SMS usage
                 await refreshSMSUsage();
                 
-                // Load sub-accounts for stats
                 const subAccounts = await apiCall('/api/vonage/subaccounts');
                 if (subAccounts.success && subAccounts.data) {
                     document.getElementById('activeCustomers').textContent = subAccounts.data.length;
                 }
                 
-                // Load recent activity (placeholder)
                 document.getElementById('recentActivity').innerHTML = `
                     <table class="table">
                         <thead>
@@ -846,7 +845,7 @@ async function autoLogin() {
             }
         }
 
-        // Refresh SMS Usage with automatic authentication
+        // Refresh SMS Usage
         async function refreshSMSUsage() {
             const container = document.getElementById('smsUsageContent');
             container.innerHTML = '<div class="loading">Loading SMS usage data</div>';
@@ -874,7 +873,6 @@ async function autoLogin() {
                         html += '</tbody></table>';
                         container.innerHTML = html;
                     } else if (data.data.bySubAccount && Object.keys(data.data.bySubAccount).length > 0) {
-                        // Show by sub-account if no country data
                         let html = '<table class="table"><thead><tr><th>Account</th><th>SMS Count</th><th>Cost</th></tr></thead><tbody>';
                         
                         for (const [account, info] of Object.entries(data.data.bySubAccount)) {
@@ -905,19 +903,16 @@ async function autoLogin() {
             }
         }
 
-        // Load Customers with automatic authentication
+        // Load Customers
         async function loadCustomers() {
             const container = document.getElementById('customersContent');
             container.innerHTML = '<div class="loading">Loading customers</div>';
             
             try {
-                // First get mappings
                 const mappings = await apiCall('/api/customers/mappings');
-                
-                // Then get sub-accounts
                 const subAccounts = await apiCall('/api/vonage/subaccounts');
                 
-                if (mappings.success && mappings.data.length > 0) {
+                if (mappings.success && mappings.data && mappings.data.length > 0) {
                     let html = '<table class="table"><thead><tr><th>Customer</th><th>Vonage Account</th><th>Xero Contact</th><th>Actions</th></tr></thead><tbody>';
                     
                     for (const mapping of mappings.data) {
@@ -936,7 +931,6 @@ async function autoLogin() {
                     html += '</tbody></table>';
                     container.innerHTML = html;
                 } else if (subAccounts.success && subAccounts.data) {
-                    // Show sub-accounts if no mappings yet
                     let html = '<p>No customer mappings yet. Here are your Vonage sub-accounts:</p>';
                     html += '<table class="table"><thead><tr><th>Account ID</th><th>Name</th><th>Balance</th><th>Status</th></tr></thead><tbody>';
                     
@@ -961,7 +955,7 @@ async function autoLogin() {
             }
         }
 
-        // Load Vonage Accounts with automatic authentication
+        // Load Vonage Accounts
         async function loadVonageAccounts() {
             const container = document.getElementById('vonageContent');
             container.innerHTML = '<div class="loading">Loading Vonage accounts</div>';
@@ -997,7 +991,7 @@ async function autoLogin() {
             }
         }
 
-        // Load Xero Data with automatic authentication
+        // Load Xero Data
         async function loadXeroData() {
             const container = document.getElementById('xeroContent');
             container.innerHTML = '<div class="loading">Loading Xero data</div>';
@@ -1029,7 +1023,7 @@ async function autoLogin() {
             }
         }
 
-        // Load Billing Data with automatic authentication
+        // Load Billing Data
         async function loadBillingData() {
             const container = document.getElementById('billingContent');
             container.innerHTML = '<div class="loading">Loading billing information</div>';
@@ -1069,9 +1063,8 @@ async function autoLogin() {
             }
         }
 
-        // Test all connections with automatic authentication
+        // Test all connections
         async function testConnections() {
-            // Test Vonage
             try {
                 const vonageTest = await apiCall('/api/vonage/test');
                 const vonageStatus = document.getElementById('vonageStatus');
@@ -1084,7 +1077,6 @@ async function autoLogin() {
                 document.getElementById('vonageStatus').innerHTML = '<span class="badge badge-danger">Error</span>';
             }
             
-            // Test Reports API
             try {
                 const reportsTest = await apiCall('/api/vonage/test-reports');
                 const reportsStatus = document.getElementById('reportsStatus');
@@ -1097,7 +1089,6 @@ async function autoLogin() {
                 document.getElementById('reportsStatus').innerHTML = '<span class="badge badge-danger">Error</span>';
             }
             
-            // Test Xero
             try {
                 const xeroTest = await apiCall('/api/xero/contacts');
                 const xeroStatus = document.getElementById('xeroStatus');
@@ -1139,7 +1130,6 @@ async function autoLogin() {
         async function showLinkCustomerModal() {
             document.getElementById('linkCustomerModal').classList.add('active');
             
-            // Load Vonage accounts
             try {
                 const vonageData = await apiCall('/api/vonage/subaccounts');
                 const vonageSelect = document.getElementById('linkVonageAccount');
@@ -1154,7 +1144,6 @@ async function autoLogin() {
                 console.error('Failed to load Vonage accounts');
             }
             
-            // Load Xero contacts
             try {
                 const xeroData = await apiCall('/api/xero/contacts');
                 const xeroSelect = document.getElementById('linkXeroContact');
