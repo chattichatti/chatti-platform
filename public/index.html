@@ -74,6 +74,12 @@
             transform: translateY(-2px);
         }
         
+        .login-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
         .error-message, .success-message {
             padding: 10px;
             border-radius: 5px;
@@ -330,12 +336,6 @@
             color: #6c757d;
         }
         
-        .empty-state-icon {
-            font-size: 48px;
-            margin-bottom: 20px;
-            opacity: 0.5;
-        }
-        
         .modal {
             display: none;
             position: fixed;
@@ -389,11 +389,6 @@
             gap: 15px;
         }
         
-        .chart-container {
-            height: 300px;
-            margin-top: 20px;
-        }
-        
         select {
             width: 100%;
             padding: 8px;
@@ -413,6 +408,16 @@
             width: auto;
             min-width: 150px;
         }
+        
+        .session-warning {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            color: #856404;
+            padding: 10px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -427,13 +432,13 @@
             <form id="loginForm">
                 <div class="form-group">
                     <label for="email">Email</label>
-                    <input type="email" id="email" value="admin@chatti.com" required>
+                    <input type="email" id="email" placeholder="Enter your email" required>
                 </div>
                 <div class="form-group">
                     <label for="password">Password</label>
-                    <input type="password" id="password" required>
+                    <input type="password" id="password" placeholder="Enter your password" required>
                 </div>
-                <button type="submit" class="login-btn">Sign In</button>
+                <button type="submit" class="login-btn" id="loginButton">Sign In</button>
             </form>
         </div>
     </div>
@@ -444,6 +449,7 @@
             <h1>📡 Chatti Platform</h1>
             <div class="user-info">
                 <span id="userEmail"></span>
+                <span id="sessionTimer" style="font-size: 12px; opacity: 0.8;"></span>
                 <button class="logout-btn" onclick="logout()">Logout</button>
             </div>
         </header>
@@ -458,6 +464,10 @@
         </nav>
 
         <div class="content">
+            <div id="sessionWarning" class="session-warning" style="display: none;">
+                Your session will expire soon. Please save your work.
+            </div>
+
             <!-- Dashboard Tab -->
             <div id="dashboard-tab" class="tab-content active">
                 <div class="stats-grid">
@@ -624,6 +634,12 @@
         // Global variables
         let authToken = null;
         let currentUser = null;
+        let sessionTimeout = null;
+        let sessionWarningTimeout = null;
+        let loginAttempts = 0;
+        const MAX_LOGIN_ATTEMPTS = 5;
+        const SESSION_DURATION = 60 * 60 * 1000; // 1 hour
+        const SESSION_WARNING_TIME = 10 * 60 * 1000; // 10 minutes before expiry
 
         // Helper function to hash password in browser
         async function sha256Hex(s) {
@@ -632,15 +648,51 @@
             return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join('');
         }
 
-        // Auto-login on page load
-        window.addEventListener('DOMContentLoaded', async () => {
-            await autoLogin();
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            // Check for existing session
+            const storedToken = localStorage.getItem('authToken');
+            const tokenExpiry = localStorage.getItem('tokenExpiry');
+            
+            if (storedToken && tokenExpiry && new Date().getTime() < parseInt(tokenExpiry)) {
+                authToken = storedToken;
+                validateSession();
+            } else {
+                // Clear any expired session
+                localStorage.removeItem('authToken');
+                localStorage.removeItem('tokenExpiry');
+                showLogin();
+            }
         });
+
+        // Validate existing session
+        async function validateSession() {
+            try {
+                const response = await fetch('/api/vonage/test', {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+                
+                if (response.ok) {
+                    showApp();
+                    startSessionTimer();
+                    loadDashboard();
+                } else {
+                    localStorage.removeItem('authToken');
+                    localStorage.removeItem('tokenExpiry');
+                    showLogin();
+                }
+            } catch (error) {
+                showLogin();
+            }
+        }
 
         // API Helper with automatic authentication
         async function apiCall(url, options = {}) {
             if (!authToken) {
                 console.error('No auth token available');
+                showLogin();
                 return { success: false, error: 'Not authenticated' };
             }
 
@@ -660,13 +712,8 @@
                 const response = await fetch(url, defaultOptions);
                 
                 if (response.status === 401 || response.status === 403) {
-                    console.log('Token expired, attempting auto-login...');
-                    await autoLogin();
-                    if (authToken) {
-                        defaultOptions.headers.Authorization = `Bearer ${authToken}`;
-                        const retryResponse = await fetch(url, defaultOptions);
-                        return retryResponse.json();
-                    }
+                    console.log('Session expired');
+                    logout();
                     throw new Error('Authentication failed');
                 }
                 
@@ -677,42 +724,19 @@
             }
         }
 
-        // Auto-login functionality
-        async function autoLogin() {
-            const email = 'admin@chatti.com';
-            const passHash = '38fd8d2a7a50331e65bd8daf6637f427c7ed9a32cc0940833f2c87f0db918259';
-            
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, passHash })
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    authToken = data.token;
-                    currentUser = data.user;
-                    localStorage.setItem('authToken', authToken);
-                    showApp();
-                    loadDashboard();
-                    return true;
-                } else {
-                    console.error('Auto-login failed:', data.message);
-                    showLogin();
-                    return false;
-                }
-            } catch (error) {
-                console.error('Auto-login error:', error);
-                showLogin();
-                return false;
-            }
-        }
-
-        // Manual login functionality (if auto-login fails)
+        // Manual login functionality
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+            
+            // Check login attempts
+            if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+                showLoginMessage('error', 'Too many failed attempts. Please try again later.');
+                return;
+            }
+            
+            const loginButton = document.getElementById('loginButton');
+            loginButton.disabled = true;
+            loginButton.textContent = 'Signing in...';
             
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
@@ -730,16 +754,31 @@
                 const data = await response.json();
                 
                 if (data.success) {
+                    loginAttempts = 0;
                     authToken = data.token;
                     currentUser = data.user;
+                    
+                    // Store token with expiry
+                    const expiry = new Date().getTime() + SESSION_DURATION;
                     localStorage.setItem('authToken', authToken);
+                    localStorage.setItem('tokenExpiry', expiry.toString());
+                    
+                    // Clear form
+                    document.getElementById('password').value = '';
+                    
                     showApp();
+                    startSessionTimer();
                     loadDashboard();
                 } else {
-                    showLoginMessage('error', data.message || 'Login failed');
+                    loginAttempts++;
+                    showLoginMessage('error', data.message || 'Invalid email or password');
                 }
             } catch (error) {
+                loginAttempts++;
                 showLoginMessage('error', 'Connection error. Please try again.');
+            } finally {
+                loginButton.disabled = false;
+                loginButton.textContent = 'Sign In';
             }
         });
 
@@ -747,26 +786,69 @@
             const messageDiv = document.getElementById('loginMessage');
             messageDiv.className = type === 'error' ? 'error-message' : 'success-message';
             messageDiv.textContent = message;
-            setTimeout(() => messageDiv.textContent = '', 5000);
+            setTimeout(() => {
+                messageDiv.textContent = '';
+                messageDiv.className = '';
+            }, 5000);
         }
 
         function showLogin() {
             document.getElementById('loginScreen').style.display = 'flex';
             document.getElementById('appScreen').style.display = 'none';
+            clearSessionTimers();
         }
 
         function showApp() {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('appScreen').style.display = 'block';
             if (currentUser) {
-                document.getElementById('userEmail').textContent = currentUser.email || 'admin@chatti.com';
+                document.getElementById('userEmail').textContent = currentUser.email || 'User';
+            }
+        }
+
+        function startSessionTimer() {
+            // Clear any existing timers
+            clearSessionTimers();
+            
+            // Set warning timer (10 minutes before expiry)
+            sessionWarningTimeout = setTimeout(() => {
+                document.getElementById('sessionWarning').style.display = 'block';
+            }, SESSION_DURATION - SESSION_WARNING_TIME);
+            
+            // Set expiry timer
+            sessionTimeout = setTimeout(() => {
+                alert('Your session has expired. Please log in again.');
+                logout();
+            }, SESSION_DURATION);
+            
+            // Update session timer display
+            updateSessionTimer();
+        }
+
+        function clearSessionTimers() {
+            if (sessionTimeout) clearTimeout(sessionTimeout);
+            if (sessionWarningTimeout) clearTimeout(sessionWarningTimeout);
+            document.getElementById('sessionWarning').style.display = 'none';
+        }
+
+        function updateSessionTimer() {
+            const expiry = localStorage.getItem('tokenExpiry');
+            if (expiry) {
+                const remaining = parseInt(expiry) - new Date().getTime();
+                if (remaining > 0) {
+                    const minutes = Math.floor(remaining / 60000);
+                    document.getElementById('sessionTimer').textContent = `Session: ${minutes}m`;
+                    setTimeout(updateSessionTimer, 60000); // Update every minute
+                }
             }
         }
 
         function logout() {
             localStorage.removeItem('authToken');
+            localStorage.removeItem('tokenExpiry');
             authToken = null;
             currentUser = null;
+            clearSessionTimers();
             showLogin();
         }
 
@@ -827,15 +909,9 @@
                         <tbody>
                             <tr>
                                 <td>2 mins ago</td>
-                                <td>Acme Corp</td>
-                                <td>SMS sent to +61 4XX XXX XXX</td>
+                                <td>Sample Account</td>
+                                <td>SMS sent</td>
                                 <td><span class="badge badge-success">Delivered</span></td>
-                            </tr>
-                            <tr>
-                                <td>15 mins ago</td>
-                                <td>TechStart Inc</td>
-                                <td>Number provisioned: +61 2 XXXX XXXX</td>
-                                <td><span class="badge badge-success">Active</span></td>
                             </tr>
                         </tbody>
                     </table>
@@ -872,31 +948,11 @@
                         
                         html += '</tbody></table>';
                         container.innerHTML = html;
-                    } else if (data.data.bySubAccount && Object.keys(data.data.bySubAccount).length > 0) {
-                        let html = '<table class="table"><thead><tr><th>Account</th><th>SMS Count</th><th>Cost</th></tr></thead><tbody>';
-                        
-                        for (const [account, info] of Object.entries(data.data.bySubAccount)) {
-                            html += `
-                                <tr>
-                                    <td>${account}</td>
-                                    <td>${info.count}</td>
-                                    <td>$${(info.cost || 0).toFixed(2)}</td>
-                                </tr>
-                            `;
-                        }
-                        
-                        html += '</tbody></table>';
-                        container.innerHTML = html;
                     } else {
                         container.innerHTML = '<div class="empty-state">No SMS usage data for current month</div>';
                     }
                 } else {
-                    container.innerHTML = `
-                        <div class="error-message">
-                            ${data.error || 'Failed to load SMS usage'}
-                            ${data.instructions ? `<br><small>${data.instructions}</small>` : ''}
-                        </div>
-                    `;
+                    container.innerHTML = '<div class="error-message">Failed to load SMS usage</div>';
                 }
             } catch (error) {
                 container.innerHTML = '<div class="error-message">Failed to load SMS usage data</div>';
@@ -909,30 +965,10 @@
             container.innerHTML = '<div class="loading">Loading customers</div>';
             
             try {
-                const mappings = await apiCall('/api/customers/mappings');
                 const subAccounts = await apiCall('/api/vonage/subaccounts');
                 
-                if (mappings.success && mappings.data && mappings.data.length > 0) {
-                    let html = '<table class="table"><thead><tr><th>Customer</th><th>Vonage Account</th><th>Xero Contact</th><th>Actions</th></tr></thead><tbody>';
-                    
-                    for (const mapping of mappings.data) {
-                        html += `
-                            <tr>
-                                <td>${mapping.customerName}</td>
-                                <td>${mapping.vonageSubAccountId}</td>
-                                <td>${mapping.xeroContactId}</td>
-                                <td>
-                                    <button class="btn btn-primary" onclick="viewCustomerUsage('${mapping.id}')">View Usage</button>
-                                </td>
-                            </tr>
-                        `;
-                    }
-                    
-                    html += '</tbody></table>';
-                    container.innerHTML = html;
-                } else if (subAccounts.success && subAccounts.data) {
-                    let html = '<p>No customer mappings yet. Here are your Vonage sub-accounts:</p>';
-                    html += '<table class="table"><thead><tr><th>Account ID</th><th>Name</th><th>Balance</th><th>Status</th></tr></thead><tbody>';
+                if (subAccounts.success && subAccounts.data) {
+                    let html = '<table class="table"><thead><tr><th>Account ID</th><th>Name</th><th>Balance</th><th>Status</th></tr></thead><tbody>';
                     
                     for (const account of subAccounts.data) {
                         html += `
@@ -948,7 +984,7 @@
                     html += '</tbody></table>';
                     container.innerHTML = html;
                 } else {
-                    container.innerHTML = '<div class="empty-state">No customers found. Click "Link Customer" to get started.</div>';
+                    container.innerHTML = '<div class="empty-state">No customers found</div>';
                 }
             } catch (error) {
                 container.innerHTML = '<div class="error-message">Failed to load customers</div>';
@@ -964,7 +1000,7 @@
                 const data = await apiCall('/api/vonage/subaccounts');
                 
                 if (data.success && data.data && data.data.length > 0) {
-                    let html = '<table class="table"><thead><tr><th>API Key</th><th>Name</th><th>Balance</th><th>Credit Limit</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+                    let html = '<table class="table"><thead><tr><th>API Key</th><th>Name</th><th>Balance</th><th>Status</th></tr></thead><tbody>';
                     
                     for (const account of data.data) {
                         html += `
@@ -972,11 +1008,7 @@
                                 <td>${account.api_key}</td>
                                 <td>${account.name || 'N/A'}</td>
                                 <td>$${(account.balance || 0).toFixed(2)}</td>
-                                <td>$${(account.credit_limit || 0).toFixed(2)}</td>
                                 <td>${account.suspended ? '<span class="badge badge-danger">Suspended</span>' : '<span class="badge badge-success">Active</span>'}</td>
-                                <td>
-                                    <button class="btn btn-primary" onclick="viewSubAccountUsage('${account.api_key}')">View Usage</button>
-                                </td>
                             </tr>
                         `;
                     }
@@ -994,73 +1026,13 @@
         // Load Xero Data
         async function loadXeroData() {
             const container = document.getElementById('xeroContent');
-            container.innerHTML = '<div class="loading">Loading Xero data</div>';
-            
-            try {
-                const data = await apiCall('/api/xero/contacts');
-                
-                if (data.success && data.data) {
-                    let html = '<table class="table"><thead><tr><th>Contact ID</th><th>Name</th><th>Email</th><th>Status</th></tr></thead><tbody>';
-                    
-                    for (const contact of data.data) {
-                        html += `
-                            <tr>
-                                <td>${contact.id}</td>
-                                <td>${contact.name}</td>
-                                <td>${contact.email}</td>
-                                <td><span class="badge badge-success">Active</span></td>
-                            </tr>
-                        `;
-                    }
-                    
-                    html += '</tbody></table>';
-                    container.innerHTML = html;
-                } else {
-                    container.innerHTML = '<div class="empty-state">No Xero contacts found. Connect to Xero to sync contacts.</div>';
-                }
-            } catch (error) {
-                container.innerHTML = '<div class="error-message">Failed to load Xero data</div>';
-            }
+            container.innerHTML = '<div class="empty-state">Xero integration not configured</div>';
         }
 
         // Load Billing Data
         async function loadBillingData() {
             const container = document.getElementById('billingContent');
-            container.innerHTML = '<div class="loading">Loading billing information</div>';
-            
-            try {
-                const currentMonth = new Date().toISOString().slice(0, 7);
-                const data = await apiCall('/api/billing/generate-invoices', {
-                    method: 'POST',
-                    body: JSON.stringify({ month: currentMonth })
-                });
-                
-                if (data.success && data.data) {
-                    let html = '<table class="table"><thead><tr><th>Invoice #</th><th>Customer</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
-                    
-                    for (const invoice of data.data) {
-                        html += `
-                            <tr>
-                                <td>${invoice.id}</td>
-                                <td>${invoice.customer}</td>
-                                <td>$${invoice.amount.toFixed(2)}</td>
-                                <td><span class="badge badge-warning">${invoice.status}</span></td>
-                                <td>
-                                    <button class="btn btn-primary">View</button>
-                                    <button class="btn btn-success">Send to Xero</button>
-                                </td>
-                            </tr>
-                        `;
-                    }
-                    
-                    html += '</tbody></table>';
-                    container.innerHTML = html;
-                } else {
-                    container.innerHTML = '<div class="empty-state">No invoices generated yet</div>';
-                }
-            } catch (error) {
-                container.innerHTML = '<div class="error-message">Failed to load billing data</div>';
-            }
+            container.innerHTML = '<div class="empty-state">No billing data available</div>';
         }
 
         // Test all connections
@@ -1069,7 +1041,7 @@
                 const vonageTest = await apiCall('/api/vonage/test');
                 const vonageStatus = document.getElementById('vonageStatus');
                 if (vonageTest.success) {
-                    vonageStatus.innerHTML = '<span class="badge badge-success">Connected</span> Balance: $' + vonageTest.balance;
+                    vonageStatus.innerHTML = '<span class="badge badge-success">Connected</span> Balance: $' + (vonageTest.balance || 0);
                 } else {
                     vonageStatus.innerHTML = '<span class="badge badge-danger">Not Connected</span>';
                 }
@@ -1083,171 +1055,34 @@
                 if (reportsTest.success) {
                     reportsStatus.innerHTML = '<span class="badge badge-success">Available</span>';
                 } else {
-                    reportsStatus.innerHTML = `<span class="badge badge-danger">Not Available</span> ${reportsTest.solution || ''}`;
+                    reportsStatus.innerHTML = '<span class="badge badge-danger">Not Available</span>';
                 }
             } catch (error) {
                 document.getElementById('reportsStatus').innerHTML = '<span class="badge badge-danger">Error</span>';
             }
             
-            try {
-                const xeroTest = await apiCall('/api/xero/contacts');
-                const xeroStatus = document.getElementById('xeroStatus');
-                if (xeroTest.success) {
-                    xeroStatus.innerHTML = '<span class="badge badge-success">Connected</span>';
-                } else {
-                    xeroStatus.innerHTML = '<span class="badge badge-warning">Not Connected</span>';
-                }
-            } catch (error) {
-                document.getElementById('xeroStatus').innerHTML = '<span class="badge badge-warning">Not Connected</span>';
-            }
+            document.getElementById('xeroStatus').innerHTML = '<span class="badge badge-warning">Not Connected</span>';
         }
 
-        // View sub-account usage
-        async function viewSubAccountUsage(subAccountId) {
-            try {
-                const data = await apiCall(`/api/vonage/subaccounts/${subAccountId}/sms-usage`);
-                if (data.success) {
-                    alert(`SMS Usage for ${subAccountId}:\nTotal SMS: ${data.data.totalSMS}\nTotal Cost: $${data.data.totalCost.toFixed(2)}`);
-                }
-            } catch (error) {
-                alert('Failed to load usage data');
-            }
-        }
-
-        // View customer usage
-        async function viewCustomerUsage(customerId) {
-            try {
-                const data = await apiCall(`/api/customers/${customerId}/sms-usage`);
-                if (data.success) {
-                    alert(`SMS Usage for ${data.data.customer.customerName}:\nTotal SMS: ${data.data.usage.totalSMS}\nTotal Cost: $${data.data.usage.totalCost.toFixed(2)}`);
-                }
-            } catch (error) {
-                alert('Failed to load customer usage');
-            }
-        }
-
-        // Show link customer modal
-        async function showLinkCustomerModal() {
-            document.getElementById('linkCustomerModal').classList.add('active');
-            
-            try {
-                const vonageData = await apiCall('/api/vonage/subaccounts');
-                const vonageSelect = document.getElementById('linkVonageAccount');
-                vonageSelect.innerHTML = '<option value="">Select sub-account...</option>';
-                
-                if (vonageData.success && vonageData.data) {
-                    vonageData.data.forEach(account => {
-                        vonageSelect.innerHTML += `<option value="${account.api_key}">${account.name || account.api_key}</option>`;
-                    });
-                }
-            } catch (error) {
-                console.error('Failed to load Vonage accounts');
-            }
-            
-            try {
-                const xeroData = await apiCall('/api/xero/contacts');
-                const xeroSelect = document.getElementById('linkXeroContact');
-                xeroSelect.innerHTML = '<option value="">Select Xero contact...</option>';
-                
-                if (xeroData.success && xeroData.data) {
-                    xeroData.data.forEach(contact => {
-                        xeroSelect.innerHTML += `<option value="${contact.id}">${contact.name}</option>`;
-                    });
-                }
-            } catch (error) {
-                console.error('Failed to load Xero contacts');
-            }
+        // Modal functions
+        function showLinkCustomerModal() {
+            alert('Customer linking functionality coming soon');
         }
 
         function closeLinkCustomerModal() {
             document.getElementById('linkCustomerModal').classList.remove('active');
         }
 
-        // Handle link customer form
-        document.getElementById('linkCustomerForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const customerName = document.getElementById('linkCustomerName').value;
-            const vonageAccount = document.getElementById('linkVonageAccount').value;
-            const xeroContact = document.getElementById('linkXeroContact').value;
-            
-            try {
-                const response = await apiCall('/api/customers/map', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        customerName: customerName,
-                        vonageSubAccountId: vonageAccount,
-                        xeroContactId: xeroContact
-                    })
-                });
-                
-                if (response.success) {
-                    alert('Customer linked successfully!');
-                    closeLinkCustomerModal();
-                    loadCustomers();
-                } else {
-                    alert('Failed to link customer: ' + response.error);
-                }
-            } catch (error) {
-                alert('Error linking customer');
-            }
-        });
-
-        // Generate invoices
-        async function generateInvoices() {
-            if (confirm('Generate invoices for the current month?')) {
-                try {
-                    const currentMonth = new Date().toISOString().slice(0, 7);
-                    const response = await apiCall('/api/billing/generate-invoices', {
-                        method: 'POST',
-                        body: JSON.stringify({ month: currentMonth })
-                    });
-                    
-                    if (response.success) {
-                        alert('Invoices generated successfully!');
-                        loadBillingData();
-                    }
-                } catch (error) {
-                    alert('Failed to generate invoices');
-                }
-            }
+        function createSubAccount() {
+            alert('Sub-account creation functionality coming soon');
         }
 
-        // Connect to Xero
-        async function connectXero() {
-            try {
-                const response = await apiCall('/api/xero/auth');
-                if (response.authUrl) {
-                    window.open(response.authUrl, '_blank');
-                }
-            } catch (error) {
-                alert('Failed to connect to Xero');
-            }
+        function generateInvoices() {
+            alert('Invoice generation functionality coming soon');
         }
 
-        // Create sub-account
-        async function createSubAccount() {
-            const name = prompt('Enter sub-account name:');
-            if (name) {
-                try {
-                    const response = await apiCall('/api/vonage/subaccounts/create', {
-                        method: 'POST',
-                        body: JSON.stringify({
-                            name: name,
-                            use_primary_account_balance: true
-                        })
-                    });
-                    
-                    if (response.success) {
-                        alert('Sub-account created successfully!');
-                        loadVonageAccounts();
-                    } else {
-                        alert('Failed to create sub-account: ' + response.error);
-                    }
-                } catch (error) {
-                    alert('Error creating sub-account');
-                }
-            }
+        function connectXero() {
+            alert('Xero connection functionality coming soon');
         }
     </script>
 </body>
