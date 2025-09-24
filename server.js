@@ -8,6 +8,7 @@ const path = require('path');
 const dotenv = require('dotenv');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { v4: uuidv4 } = require('uuid');
 
 // Load environment variables
 dotenv.config();
@@ -39,6 +40,8 @@ const config = {
         apiKey: String(process.env.VONAGE_API_KEY || '4c42609f'),
         apiSecret: String(process.env.VONAGE_API_SECRET || ''),
         accountId: String(process.env.VONAGE_ACCOUNT_ID || '4c42609f'),
+        applicationId: String(process.env.VONAGE_APPLICATION_ID || ''),
+        privateKey: process.env.VONAGE_PRIVATE_KEY || '', // Add this to environment variables
         baseUrl: 'https://rest.nexmo.com',
         apiBaseUrl: 'https://api.nexmo.com'
     },
@@ -137,6 +140,36 @@ async function fetchSubAccounts() {
     } catch (error) {
         console.error('Error fetching sub-accounts:', error.message);
         return subAccountsCache.data;
+    }
+}
+
+// =================== JWT GENERATION FOR VONAGE ===================
+
+function generateVonageJWT() {
+    // If no application ID or private key, fall back to Basic Auth
+    if (!config.vonage.applicationId || !config.vonage.privateKey) {
+        console.log('No Vonage Application configured, using Basic Auth');
+        return null;
+    }
+    
+    try {
+        const now = Math.floor(Date.now() / 1000);
+        const payload = {
+            application_id: config.vonage.applicationId,
+            iat: now,
+            jti: uuidv4(),
+            exp: now + 3600 // 1 hour expiry
+        };
+        
+        // Sign with private key
+        const token = jwt.sign(payload, config.vonage.privateKey, {
+            algorithm: 'RS256'
+        });
+        
+        return token;
+    } catch (error) {
+        console.error('Error generating Vonage JWT:', error.message);
+        return null;
     }
 }
 
@@ -259,6 +292,56 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
         res.json({ 
             success: false, 
             error: error.response?.data || error.message 
+        });
+    }
+});
+
+// Test JWT authentication for Reports API
+app.get('/api/vonage/test-jwt', authenticateToken, async (req, res) => {
+    try {
+        const jwtToken = generateVonageJWT();
+        
+        if (!jwtToken) {
+            return res.json({
+                success: false,
+                message: 'JWT generation failed. Need VONAGE_APPLICATION_ID and VONAGE_PRIVATE_KEY in environment variables',
+                help: 'Create a Vonage Application in your dashboard and add the credentials to Render'
+            });
+        }
+        
+        // Test the JWT with a simple Reports API call
+        const testBody = {
+            product: 'SMS',
+            date_start: '2024-10-01T00:00:00Z',
+            date_end: '2024-10-31T23:59:59Z',
+            include_subaccounts: true
+        };
+        
+        console.log('Testing JWT with Reports API...');
+        console.log('Request body:', JSON.stringify(testBody, null, 2));
+        
+        const response = await axios.post('https://api.nexmo.com/v2/reports', testBody, {
+            headers: {
+                'Authorization': `Bearer ${jwtToken}`,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            timeout: 10000
+        });
+        
+        res.json({
+            success: true,
+            message: 'JWT authentication working!',
+            recordCount: response.data?.records?.length || 0,
+            data: response.data
+        });
+        
+    } catch (error) {
+        res.json({
+            success: false,
+            error: error.response?.status,
+            message: error.response?.data || error.message,
+            help: 'Check that your Vonage Application has Reports API permissions'
         });
     }
 });
@@ -581,35 +664,65 @@ async function getSMSUsage(req, res) {
     }
 }
 
-// Helper function to fetch SMS data using async method
+// Helper function to fetch SMS data using async method with JWT
 async function fetchSMSDataAsync(auth, dateStart, dateEnd) {
     try {
-        console.log('\nTrying ASYNC Reports API with sub-accounts...');
+        console.log('\nTrying ASYNC Reports API with JWT authentication...');
+        
+        // Generate JWT token
+        const jwtToken = generateVonageJWT();
+        
+        if (!jwtToken) {
+            console.log('No JWT available, falling back to Basic Auth');
+            // Try with Basic Auth as fallback
+            auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+        }
         
         const asyncUrl = 'https://api.nexmo.com/v2/reports';
         const asyncBody = {
             product: 'SMS',
-            account_id: config.vonage.accountId,
-            include_subaccounts: true,
             date_start: `${dateStart}T00:00:00Z`,
-            date_end: `${dateEnd}T23:59:59Z`
+            date_end: `${dateEnd}T23:59:59Z`,
+            include_subaccounts: true,
+            direction: 'outbound'
+        };
+        
+        console.log('Request URL:', asyncUrl);
+        console.log('Request body:', JSON.stringify(asyncBody, null, 2));
+        console.log('Using authentication:', jwtToken ? 'JWT' : 'Basic Auth');
+        
+        const headers = jwtToken ? {
+            'Authorization': `Bearer ${jwtToken}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        } : {
+            'Authorization': `Basic ${auth}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
         };
         
         const createReportResponse = await axios.post(asyncUrl, asyncBody, {
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/json'
-            },
+            headers: headers,
             timeout: 10000
         });
         
+        console.log('Report response:', createReportResponse.status);
+        console.log('Response data:', createReportResponse.data);
+        
+        // For synchronous endpoint, data might be returned immediately
+        if (createReportResponse.data?.records) {
+            console.log(`Sync response returned ${createReportResponse.data.records.length} records immediately`);
+            return createReportResponse.data.records;
+        }
+        
+        // For async, we get a request_id
         const reportId = createReportResponse.data?.request_id || 
                         createReportResponse.data?.id || 
                         createReportResponse.data?.report_id;
         
         if (!reportId) {
-            console.log('No report ID returned from async API');
-            return null;
+            console.log('No report ID returned, checking if data is directly in response');
+            return createReportResponse.data?.items || createReportResponse.data?.data || null;
         }
         
         console.log('Report created with ID:', reportId);
@@ -627,10 +740,7 @@ async function fetchSMSDataAsync(auth, dateStart, dateEnd) {
             try {
                 const statusUrl = `https://api.nexmo.com/v2/reports/${reportId}`;
                 const statusResponse = await axios.get(statusUrl, {
-                    headers: {
-                        'Authorization': `Basic ${auth}`,
-                        'Accept': 'application/json'
-                    },
+                    headers: headers,
                     timeout: 10000
                 });
                 
@@ -652,7 +762,7 @@ async function fetchSMSDataAsync(auth, dateStart, dateEnd) {
                     // Try download URL if present
                     if (!reportData && statusResponse.data?.download_url) {
                         const downloadResponse = await axios.get(statusResponse.data.download_url, {
-                            headers: { 'Authorization': `Basic ${auth}` },
+                            headers: headers,
                             timeout: 30000
                         });
                         reportData = downloadResponse.data?.items || 
@@ -681,6 +791,9 @@ async function fetchSMSDataAsync(auth, dateStart, dateEnd) {
         
     } catch (error) {
         console.error('Async method error:', error.response?.status, error.message);
+        if (error.response?.data) {
+            console.error('Error details:', JSON.stringify(error.response.data, null, 2));
+        }
         return null;
     }
 }
@@ -989,6 +1102,103 @@ app.get('/api/billing/generate-invoices', authenticateToken, async (req, res) =>
         data: invoices,
         totalAmount: usageData.totalCost,
         totalSMS: usageData.total
+    });
+});
+
+// =================== DIAGNOSTIC ENDPOINTS ===================
+
+// Find which API has SMS data
+app.get('/api/vonage/find-sms-data', authenticateToken, async (req, res) => {
+    const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+    const results = {};
+    
+    console.log('Testing various Vonage APIs to find SMS data...');
+    
+    // Test different endpoints
+    const endpoints = [
+        {
+            name: 'Search Messages API',
+            url: `https://api.nexmo.com/search/messages`,
+            method: 'GET',
+            params: {
+                api_key: config.vonage.apiKey,
+                api_secret: config.vonage.apiSecret,
+                date_start: '2024-11-01',
+                date_end: '2024-11-30'
+            }
+        },
+        {
+            name: 'Search Rejections',
+            url: `https://api.nexmo.com/search/rejections`,
+            method: 'GET',
+            params: {
+                api_key: config.vonage.apiKey,
+                api_secret: config.vonage.apiSecret,
+                date_start: '2024-11-01',
+                date_end: '2024-11-30'
+            }
+        },
+        {
+            name: 'Account Statistics',
+            url: `https://rest.nexmo.com/account/stats`,
+            method: 'GET',
+            params: {
+                api_key: config.vonage.apiKey,
+                api_secret: config.vonage.apiSecret
+            }
+        },
+        {
+            name: 'CDR Records',
+            url: `https://api.nexmo.com/beta/conversions`,
+            method: 'GET',
+            useBasic: true
+        }
+    ];
+    
+    for (const endpoint of endpoints) {
+        try {
+            console.log(`Testing: ${endpoint.name}`);
+            const options = {
+                method: endpoint.method,
+                url: endpoint.url,
+                timeout: 10000
+            };
+            
+            if (endpoint.useBasic) {
+                options.headers = {
+                    'Authorization': `Basic ${auth}`,
+                    'Content-Type': 'application/json'
+                };
+            } else if (endpoint.params) {
+                options.params = endpoint.params;
+            }
+            
+            const response = await axios(options);
+            
+            results[endpoint.name] = {
+                success: true,
+                hasData: !!response.data,
+                sampleData: response.data ? 
+                    (typeof response.data === 'object' ? 
+                        Object.keys(response.data).slice(0, 5) : 
+                        'Data received') : 
+                    'No data'
+            };
+            
+        } catch (error) {
+            results[endpoint.name] = {
+                success: false,
+                status: error.response?.status,
+                error: error.response?.data?.error_text || error.message
+            };
+        }
+    }
+    
+    res.json({
+        success: true,
+        message: 'API endpoint test results',
+        results: results,
+        recommendation: 'Check which endpoints returned data'
     });
 });
 
