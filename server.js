@@ -1,5 +1,5 @@
 // server.js - Complete Backend Server for Chatti Platform with Vonage Reseller Integration
-// Version: Individual sub-account querying (one at a time)
+// Version: Fixed to use include_subaccounts and correct dates
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,6 @@ const path = require('path');
 const dotenv = require('dotenv');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
-const AdmZip = require('adm-zip');
 
 // Load environment variables
 dotenv.config();
@@ -39,9 +38,7 @@ const config = {
     vonage: {
         apiKey: String(process.env.VONAGE_API_KEY || '4c42609f'),
         apiSecret: String(process.env.VONAGE_API_SECRET || ''),
-        accountId: String(process.env.VONAGE_ACCOUNT_ID || '4c42609f'),
-        applicationId: String(process.env.VONAGE_APPLICATION_ID || ''),
-        privateKey: process.env.VONAGE_PRIVATE_KEY || '',
+        accountId: String(process.env.VONAGE_ACCOUNT_ID || 'f3fa74ea'), // Changed to f3fa74ea as shown in CSV
         baseUrl: 'https://rest.nexmo.com',
         apiBaseUrl: 'https://api.nexmo.com'
     }
@@ -49,18 +46,7 @@ const config = {
 
 // Store for data
 let dataStore = {
-    customers: [],
-    usage: {},
-    rates: {},
-    customerMappings: [],
     smsCache: {}
-};
-
-// Cache for sub-accounts
-let subAccountsCache = {
-    data: [],
-    lastFetch: 0,
-    cacheDuration: 5 * 60 * 1000
 };
 
 // =================== HELPER FUNCTIONS ===================
@@ -94,72 +80,6 @@ function getCountryName(code) {
         'Unknown': 'Unknown'
     };
     return countries[code] || code;
-}
-
-// Helper to fetch sub-accounts with caching
-async function fetchSubAccounts() {
-    if (subAccountsCache.data.length > 0 && 
-        (Date.now() - subAccountsCache.lastFetch) < subAccountsCache.cacheDuration) {
-        return subAccountsCache.data;
-    }
-    
-    try {
-        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        
-        const response = await axios.get(url, {
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/json'
-            },
-            timeout: 10000
-        });
-        
-        let subAccounts = [];
-        
-        if (response.data._embedded?.subaccounts) {
-            subAccounts = response.data._embedded.subaccounts;
-        } else if (response.data._embedded?.primary_accounts) {
-            subAccounts = response.data._embedded.primary_accounts;
-        }
-        
-        subAccountsCache.data = subAccounts;
-        subAccountsCache.lastFetch = Date.now();
-        
-        console.log(`Cached ${subAccounts.length} sub-accounts`);
-        return subAccounts;
-        
-    } catch (error) {
-        console.error('Error fetching sub-accounts:', error.message);
-        return [];
-    }
-}
-
-// =================== JWT GENERATION FOR VONAGE ===================
-
-function generateVonageJWT() {
-    if (!config.vonage.applicationId || !config.vonage.privateKey) {
-        return null;
-    }
-    
-    try {
-        const now = Math.floor(Date.now() / 1000);
-        const payload = {
-            application_id: config.vonage.applicationId,
-            iat: now,
-            jti: uuidv4(),
-            exp: now + 3600
-        };
-        
-        const token = jwt.sign(payload, config.vonage.privateKey, {
-            algorithm: 'RS256'
-        });
-        
-        return token;
-    } catch (error) {
-        console.error('Error generating Vonage JWT:', error.message);
-        return null;
-    }
 }
 
 // =================== AUTHENTICATION MIDDLEWARE ===================
@@ -214,8 +134,9 @@ function processRecords(records) {
         const cost = parseFloat(record.price || record.total_price || record.cost || 0);
         aggregated.totalCost += cost;
         
-        const country = record.to_country || record.country || getCountryFromNumber(record.to);
-        const countryName = getCountryName(country);
+        // Use country from record or detect from number
+        const country = record.country || record.to_country || getCountryFromNumber(record.to);
+        const countryName = record.country_name || getCountryName(country);
         
         if (!aggregated.byCountry[countryName]) {
             aggregated.byCountry[countryName] = {
@@ -229,12 +150,10 @@ function processRecords(records) {
         aggregated.byCountry[countryName].cost += cost;
         
         const accountId = record.account_id || record.api_key || 'master';
-        const accountName = record.account_name || accountId;
         
         if (!aggregated.bySubAccount[accountId]) {
             aggregated.bySubAccount[accountId] = {
                 accountId: accountId,
-                accountName: accountName,
                 count: 0,
                 cost: 0
             };
@@ -242,7 +161,7 @@ function processRecords(records) {
         aggregated.bySubAccount[accountId].count++;
         aggregated.bySubAccount[accountId].cost += cost;
         
-        const messageDate = record.date_start || record.timestamp || record.created_at;
+        const messageDate = record.date_finalized || record.date_received || record.date_start || record.timestamp;
         if (messageDate) {
             const dateKey = messageDate.slice(0, 10);
             if (!aggregated.byDate[dateKey]) {
@@ -256,115 +175,106 @@ function processRecords(records) {
     return aggregated;
 }
 
-// =============== INDIVIDUAL SUB-ACCOUNT QUERYING ===============
+// =============== MAIN REPORTS API FUNCTION ===============
 
-async function fetchSubAccountData(headers, subAccountApiKey, dateStart, dateEnd) {
+async function fetchSMSReports(dateStart, dateEnd) {
+    console.log(`\n=== FETCHING SMS REPORTS ===`);
+    console.log(`Date range: ${dateStart} to ${dateEnd}`);
+    console.log(`Master Account ID: ${config.vonage.accountId}`);
+    
     try {
-        const body = {
-            account_id: subAccountApiKey,  // Query specific sub-account
-            product: "SMS",
-            date_start: `${dateStart}T00:00:00Z`,
-            date_end: `${dateEnd}T23:59:59Z`,
-            direction: "outbound"
+        // Use Basic Auth with master key and secret
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+        
+        const headers = {
+            'Authorization': `Basic ${auth}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
         };
         
-        const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
+        // Match EXACTLY what Vonage support used
+        const body = {
+            "account_id": config.vonage.accountId,  // f3fa74ea
+            "product": "SMS",
+            "include_subaccounts": "true",  // String, not boolean
+            "direction": "outbound",
+            "date_start": `${dateStart}T00:00:00+0000`,  // Use +0000 format like Vonage
+            "date_end": `${dateEnd}T23:59:59+0000`
+        };
+        
+        console.log('Request body:', JSON.stringify(body, null, 2));
+        console.log('Using Basic Auth with API Key:', config.vonage.apiKey);
+        
+        const url = 'https://api.nexmo.com/v2/reports';
+        
+        const response = await axios.post(url, body, {
             headers,
-            timeout: 10000  // 10 second timeout per sub-account
-        });
-        
-        return response.data?.records || [];
-    } catch (error) {
-        // Silently fail for individual sub-accounts
-        return [];
-    }
-}
-
-async function fetchAllSubAccountsData(headers, dateStart, dateEnd) {
-    console.log('\n=== FETCHING DATA FROM INDIVIDUAL SUB-ACCOUNTS ===');
-    
-    // Get list of sub-accounts
-    const subAccounts = await fetchSubAccounts();
-    
-    if (subAccounts.length === 0) {
-        console.log('No sub-accounts found');
-        return [];
-    }
-    
-    console.log(`Found ${subAccounts.length} sub-accounts to query`);
-    
-    let allRecords = [];
-    let successCount = 0;
-    let failCount = 0;
-    const batchSize = 10; // Process 10 accounts at a time to avoid overwhelming the API
-    
-    // Process in batches
-    for (let i = 0; i < subAccounts.length; i += batchSize) {
-        const batch = subAccounts.slice(i, Math.min(i + batchSize, subAccounts.length));
-        console.log(`Processing batch ${Math.floor(i/batchSize) + 1} (accounts ${i + 1}-${Math.min(i + batchSize, subAccounts.length)})`);
-        
-        // Process batch in parallel
-        const batchPromises = batch.map(async (subAccount) => {
-            try {
-                const records = await fetchSubAccountData(headers, subAccount.api_key, dateStart, dateEnd);
-                if (records.length > 0) {
-                    successCount++;
-                    console.log(`✓ ${subAccount.api_key}: ${records.length} records`);
-                    return records;
-                } else {
-                    console.log(`○ ${subAccount.api_key}: No data`);
-                    return [];
-                }
-            } catch (error) {
-                failCount++;
-                console.log(`✗ ${subAccount.api_key}: Failed`);
-                return [];
+            timeout: 30000,
+            validateStatus: function (status) {
+                return status < 500; // Don't throw on 4xx errors
             }
         });
         
-        const batchResults = await Promise.all(batchPromises);
-        batchResults.forEach(records => {
-            allRecords = allRecords.concat(records);
-        });
+        console.log(`Response status: ${response.status}`);
         
-        // Small delay between batches to avoid rate limiting
-        if (i + batchSize < subAccounts.length) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
+        if (response.status === 200 || response.status === 201 || response.status === 202) {
+            // Check if we got immediate results (synchronous)
+            if (response.data?.records && Array.isArray(response.data.records)) {
+                console.log(`✅ Got synchronous response with ${response.data.records.length} records`);
+                
+                // Log sample of records for debugging
+                if (response.data.records.length > 0) {
+                    console.log('Sample record:', JSON.stringify(response.data.records[0], null, 2));
+                    
+                    // Count records by account_id
+                    const accountCounts = {};
+                    response.data.records.forEach(r => {
+                        const accId = r.account_id || 'unknown';
+                        accountCounts[accId] = (accountCounts[accId] || 0) + 1;
+                    });
+                    console.log('Records by account:', accountCounts);
+                }
+                
+                return response.data.records;
+            }
+            
+            // Check if we got an async request ID
+            if (response.data?.request_id) {
+                console.log(`⏳ Got async request_id: ${response.data.request_id}`);
+                console.log('Would need to poll /v2/reports/' + response.data.request_id + ' for results');
+                // For now, return empty - you'd need to implement polling
+                return [];
+            }
+            
+            // Check if we got an empty result
+            if (response.data?.records === null || (Array.isArray(response.data?.records) && response.data.records.length === 0)) {
+                console.log('⚠️ API returned empty records array - no data for this period');
+                return [];
+            }
+            
+            console.log('⚠️ Unexpected response structure:', JSON.stringify(response.data, null, 2));
+            return [];
+            
+        } else if (response.status === 403) {
+            console.error(`❌ 403 Forbidden - Check API permissions`);
+            console.error('Error:', response.data);
+            return [];
+        } else if (response.status === 401) {
+            console.error(`❌ 401 Unauthorized - Check API credentials`);
+            console.error('Error:', response.data);
+            return [];
+        } else {
+            console.error(`❌ Error response: ${response.status}`);
+            console.error('Error data:', response.data);
+            return [];
         }
-    }
-    
-    console.log(`\n=== SUMMARY ===`);
-    console.log(`Successful queries: ${successCount}/${subAccounts.length}`);
-    console.log(`Failed queries: ${failCount}/${subAccounts.length}`);
-    console.log(`Total records collected: ${allRecords.length}`);
-    
-    return allRecords;
-}
-
-// Master account data fetch
-async function fetchMasterAccountData(headers, dateStart, dateEnd) {
-    try {
-        console.log('\n=== FETCHING MASTER ACCOUNT DATA ===');
-        
-        const body = {
-            account_id: config.vonage.accountId,
-            product: "SMS",
-            date_start: `${dateStart}T00:00:00Z`,
-            date_end: `${dateEnd}T23:59:59Z`,
-            direction: "outbound"
-        };
-        
-        const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
-            headers,
-            timeout: 30000
-        });
-        
-        const records = response.data?.records || [];
-        console.log(`Master account records: ${records.length}`);
-        return records;
         
     } catch (error) {
-        console.error('Master account query failed:', error.response?.status);
+        console.error('❌ Reports API error:', error.message);
+        if (error.response) {
+            console.error('Error response status:', error.response.status);
+            console.error('Error response data:', error.response.data);
+        }
         return [];
     }
 }
@@ -421,10 +331,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-app.post('/api/logout', (req, res) => {
-    res.json({ success: true, message: 'Logged out successfully' });
-});
-
 // =================== BASIC API ROUTES ===================
 
 app.get('/api/health', (req, res) => {
@@ -457,65 +363,20 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
     }
 });
 
-// Test Reports API endpoint
-app.get('/api/vonage/test-reports', authenticateToken, (req, res) => {
-    res.json({
-        success: true,
-        message: 'Reports API endpoint available'
-    });
-});
-
-// =================== VONAGE SUBACCOUNTS API ===================
-
-app.get('/api/vonage/subaccounts', authenticateToken, async (req, res) => {
-    try {
-        const subAccounts = await fetchSubAccounts();
-        
-        return res.json({ 
-            success: true, 
-            data: subAccounts,
-            count: subAccounts.length
-        });
-        
-    } catch (error) {
-        return res.json({ 
-            success: true,
-            data: [],
-            count: 0,
-            error: error.message
-        });
-    }
-});
-
-// Sub-account SMS usage
-app.get('/api/vonage/subaccounts/:id/sms-usage', authenticateToken, async (req, res) => {
-    try {
-        const { id } = req.params;
-        
-        res.json({ 
-            success: true, 
-            data: {
-                subAccountKey: id,
-                total: 0,
-                totalCost: 0,
-                message: 'Individual sub-account data requires sub-account API secret'
-            }
-        });
-        
-    } catch (error) {
-        res.json({ 
-            success: false, 
-            error: error.message 
-        });
-    }
-});
-
 // =================== SMS USAGE ENDPOINTS ===================
 
-// SMS usage endpoint - QUERIES EACH SUB-ACCOUNT INDIVIDUALLY
+// Main SMS usage endpoint - uses include_subaccounts
 app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
     try {
-        const { month = new Date().toISOString().slice(0, 7) } = req.query;
+        // Get current month or use provided month
+        let { month } = req.query;
+        
+        // Default to current month if not specified (September 2025)
+        if (!month) {
+            month = '2025-09';  // Current month is September 2025
+        }
+        
+        console.log(`\n=== SMS USAGE REQUEST FOR ${month} ===`);
         
         // Check cache first
         const cacheKey = `sms_${month}`;
@@ -525,50 +386,18 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
             return res.json(dataStore.smsCache[cacheKey].data);
         }
         
-        const year = parseInt(month.split('-')[0]);
-        const monthNum = parseInt(month.split('-')[1]);
+        const [year, monthNum] = month.split('-').map(Number);
         const dateStart = `${year}-${String(monthNum).padStart(2, '0')}-01`;
         const lastDay = new Date(year, monthNum, 0).getDate();
         const dateEnd = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
         
-        console.log(`\n=== SMS USAGE REQUEST FOR ${month} ===`);
-        console.log(`Date range: ${dateStart} to ${dateEnd}`);
+        // Fetch data using include_subaccounts
+        const records = await fetchSMSReports(dateStart, dateEnd);
         
-        // Prepare headers - use JWT if available, otherwise Basic auth
-        let headers;
-        const jwtToken = generateVonageJWT();
-        
-        if (jwtToken) {
-            console.log('Using JWT authentication');
-            headers = {
-                'Authorization': `Bearer ${jwtToken}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            };
-        } else {
-            console.log('Using Basic authentication');
-            headers = {
-                'Authorization': `Basic ${Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64')}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            };
-        }
-        
-        // Fetch data from master account and all sub-accounts individually
-        let allRecords = [];
-        
-        // Get master account data
-        const masterRecords = await fetchMasterAccountData(headers, dateStart, dateEnd);
-        allRecords = allRecords.concat(masterRecords);
-        
-        // Get all sub-accounts data (one by one)
-        const subAccountRecords = await fetchAllSubAccountsData(headers, dateStart, dateEnd);
-        allRecords = allRecords.concat(subAccountRecords);
-        
-        console.log(`\nTotal records from all accounts: ${allRecords.length}`);
+        console.log(`Total records retrieved: ${records.length}`);
         
         // Process and return the records
-        const aggregatedData = processRecords(allRecords);
+        const aggregatedData = processRecords(records);
         
         const result = {
             success: true,
@@ -576,8 +405,7 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
             month: month,
             dateRange: `${dateStart} to ${dateEnd}`,
             recordCount: aggregatedData.total,
-            method: 'individual-subaccounts',
-            accountsQueried: subAccountsCache.data.length + 1  // sub-accounts + master
+            method: 'include_subaccounts'
         };
         
         // Cache the result if we got data
@@ -602,43 +430,22 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
 
 // Current month usage
 app.get('/api/vonage/usage/current', authenticateToken, (req, res) => {
-    const month = new Date().toISOString().slice(0, 7);
+    const now = new Date();
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     res.redirect(`/api/vonage/usage/sms?month=${month}`);
 });
 
 // Dashboard summary
 app.get('/api/vonage/dashboard/summary', authenticateToken, async (req, res) => {
     try {
-        const currentMonth = new Date().toISOString().slice(0, 7);
-        const year = new Date().getFullYear();
-        const month = new Date().getMonth() + 1;
-        const dateStart = `${year}-${String(month).padStart(2, '0')}-01`;
-        const dateEnd = new Date().toISOString().slice(0, 10);
+        const now = new Date();
+        const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        const dateStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+        const dateEnd = now.toISOString().slice(0, 10);
         
-        let headers;
-        const jwtToken = generateVonageJWT();
-        
-        if (jwtToken) {
-            headers = {
-                'Authorization': `Bearer ${jwtToken}`,
-                'Content-Type': 'application/json'
-            };
-        } else {
-            headers = {
-                'Authorization': `Basic ${Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64')}`,
-                'Content-Type': 'application/json'
-            };
-        }
-        
-        // Get data from all accounts
-        let allRecords = [];
-        const masterRecords = await fetchMasterAccountData(headers, dateStart, dateEnd);
-        allRecords = allRecords.concat(masterRecords);
-        
-        const subAccountRecords = await fetchAllSubAccountsData(headers, dateStart, dateEnd);
-        allRecords = allRecords.concat(subAccountRecords);
-        
-        const data = processRecords(allRecords);
+        // Fetch data using include_subaccounts
+        const records = await fetchSMSReports(dateStart, dateEnd);
+        const data = processRecords(records);
         
         const summary = {
             success: true,
@@ -657,6 +464,39 @@ app.get('/api/vonage/dashboard/summary', authenticateToken, async (req, res) => 
             error: error.message,
             totalSMS: 0,
             totalCost: 0
+        });
+    }
+});
+
+// Test endpoint to check what month we're querying
+app.get('/api/test/current-date', authenticateToken, (req, res) => {
+    const now = new Date();
+    res.json({
+        serverTime: now.toISOString(),
+        currentMonth: '2025-09',  // September 2025
+        actualSystemMonth: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`,
+        timezone: process.env.TZ || 'UTC'
+    });
+});
+
+// Test endpoint to try a specific date range matching the CSV
+app.get('/api/test/csv-date-range', authenticateToken, async (req, res) => {
+    try {
+        // Use the exact date from the CSV file
+        const records = await fetchSMSReports('2025-09-24', '2025-09-24');
+        const data = processRecords(records);
+        
+        res.json({
+            success: true,
+            dateRange: '2025-09-24 to 2025-09-24',
+            recordCount: records.length,
+            processedData: data,
+            rawRecords: records.slice(0, 5)  // First 5 records for debugging
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
         });
     }
 });
@@ -692,17 +532,19 @@ app.listen(PORT, () => {
     }
     
     console.log('\n=== VONAGE API STATUS ===');
-    if (!process.env.VONAGE_API_KEY) {
-        console.error('❌ VONAGE_API_KEY: NOT SET');
+    console.log('✅ VONAGE_API_KEY:', config.vonage.apiKey);
+    console.log('✅ VONAGE_ACCOUNT_ID:', config.vonage.accountId);
+    
+    if (!process.env.VONAGE_API_SECRET) {
+        console.error('❌ VONAGE_API_SECRET: NOT SET - Required for API calls');
     } else {
-        console.log('✅ VONAGE_API_KEY:', process.env.VONAGE_API_KEY);
+        console.log('✅ VONAGE_API_SECRET: Configured');
     }
     
-    if (!process.env.VONAGE_APPLICATION_ID) {
-        console.log('ℹ️  VONAGE_APPLICATION_ID: Not set (using Basic auth)');
-    } else {
-        console.log('✅ VONAGE_APPLICATION_ID: Configured');
-    }
+    const now = new Date();
+    console.log('\n=== CURRENT DATE INFO ===');
+    console.log(`Server time: ${now.toISOString()}`);
+    console.log(`Current month: ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
     
     console.log('\n========================================\n');
 });
