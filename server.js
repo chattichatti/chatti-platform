@@ -38,7 +38,7 @@ const config = {
     vonage: {
         apiKey: String(process.env.VONAGE_API_KEY || '4c42609f'),
         apiSecret: String(process.env.VONAGE_API_SECRET || ''),
-        accountId: String(process.env.VONAGE_ACCOUNT_ID || '4c42609f'), // Corrected from f3fa74ea
+        accountId: String(process.env.VONAGE_ACCOUNT_ID || '4c42609f'),
         baseUrl: 'https://rest.nexmo.com',
         apiBaseUrl: 'https://api.nexmo.com'
     }
@@ -134,7 +134,6 @@ function processRecords(records) {
         const cost = parseFloat(record.price || record.total_price || record.cost || 0);
         aggregated.totalCost += cost;
         
-        // Use country from record or detect from number
         const country = record.country || record.to_country || getCountryFromNumber(record.to);
         const countryName = record.country_name || getCountryName(country);
         
@@ -174,211 +173,6 @@ function processRecords(records) {
     
     return aggregated;
 }
-
-// =================== SAFE SMS REPORTING - ONE ACCOUNT AT A TIME ===================
-
-// Helper to get sub-accounts list
-async function getSubAccountsList() {
-    try {
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
-        
-        const response = await axios.get(url, {
-            headers: { 'Authorization': `Basic ${auth}` },
-            timeout: 10000
-        });
-        
-        let accounts = [];
-        if (response.data?._embedded?.subaccounts) {
-            accounts = response.data._embedded.subaccounts;
-        }
-        
-        // Add the specific account from CSV if not in list
-        const csvAccount = 'f3fa74ea';
-        if (!accounts.find(a => a.api_key === csvAccount)) {
-            accounts.push({ api_key: csvAccount, name: 'Account from CSV' });
-        }
-        
-        return accounts;
-    } catch (error) {
-        console.error('Error fetching sub-accounts:', error.message);
-        return [];
-    }
-}
-
-// SAFE polling for single account reports (should complete quickly)
-async function pollSingleAccountReport(requestId, headers, accountId) {
-    const maxAttempts = 10; // Only 100 seconds for single accounts
-    const pollInterval = 10000; // 10 seconds
-    
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-            const statusUrl = `https://api.nexmo.com/v2/reports/${requestId}`;
-            const response = await axios.get(statusUrl, {
-                headers,
-                timeout: 10000,
-                validateStatus: (status) => status < 500
-            });
-            
-            const status = response.data?.status || 'unknown';
-            console.log(`  Poll ${attempt}/${maxAttempts} for ${accountId}: ${status}`);
-            
-            if (status === 'completed' || status === 'COMPLETED') {
-                // Check for download URL
-                if (response.data?.download_url) {
-                    console.log(`  📥 Downloading report for ${accountId}`);
-                    try {
-                        const downloadResponse = await axios.get(response.data.download_url, {
-                            headers,
-                            timeout: 30000
-                        });
-                        
-                        if (downloadResponse.data?.records) {
-                            console.log(`  ✅ Downloaded ${downloadResponse.data.records.length} records for ${accountId}`);
-                            return downloadResponse.data.records;
-                        }
-                    } catch (dlError) {
-                        console.error(`  ❌ Download failed for ${accountId}:`, dlError.message);
-                    }
-                }
-                
-                // Check for direct records
-                if (response.data?.records) {
-                    console.log(`  ✅ Got ${response.data.records.length} records for ${accountId}`);
-                    return response.data.records;
-                }
-                
-                return [];
-            }
-            
-            if (status === 'failed' || status === 'FAILED') {
-                console.error(`  ❌ Report failed for ${accountId}`);
-                return [];
-            }
-            
-            // Wait before next poll
-            if (attempt < maxAttempts) {
-                await new Promise(resolve => setTimeout(resolve, pollInterval));
-            }
-        } catch (error) {
-            console.error(`  Poll error for ${accountId}:`, error.message);
-            if (attempt === maxAttempts) return [];
-        }
-    }
-    
-    console.warn(`  ⏱️ Timeout polling ${accountId} after ${maxAttempts} attempts`);
-    return [];
-}
-
-// Get SMS for a specific date range - SIMPLIFIED
-async function getSMSForDateRange(accountId, dateStart, dateEnd) {
-    try {
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        const headers = {
-            'Authorization': `Basic ${auth}`,
-            'Content-Type': 'application/json'
-        };
-        
-        const body = {
-            "account_id": accountId,
-            "product": "SMS",
-            "direction": "outbound",
-            "date_start": `${dateStart}T00:00:00+0000`,
-            "date_end": `${dateEnd}T23:59:59+0000`
-        };
-        
-        console.log(`Requesting SMS for ${accountId}: ${dateStart} to ${dateEnd}`);
-        
-        const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
-            headers,
-            timeout: 30000,
-            validateStatus: (status) => status < 500
-        });
-        
-        // Synchronous response
-        if (response.data?.records && Array.isArray(response.data.records)) {
-            console.log(`Got ${response.data.records.length} records immediately`);
-            return response.data.records;
-        }
-        
-        // Async response - poll for it
-        if (response.data?.request_id) {
-            console.log(`Got async request_id: ${response.data.request_id}`);
-            
-            // Simple polling - 10 attempts, 5 seconds apart
-            for (let i = 1; i <= 10; i++) {
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                
-                const statusUrl = `https://api.nexmo.com/v2/reports/${response.data.request_id}`;
-                const statusResponse = await axios.get(statusUrl, { headers, timeout: 10000 });
-                
-                console.log(`Poll ${i}/10: ${statusResponse.data?.status}`);
-                
-                if (statusResponse.data?.status === 'completed' || statusResponse.data?.status === 'COMPLETED') {
-                    // Download the results
-                    if (statusResponse.data?.download_url) {
-                        const downloadResponse = await axios.get(statusResponse.data.download_url, { 
-                            headers, 
-                            timeout: 30000 
-                        });
-                        if (downloadResponse.data?.records) {
-                            console.log(`Downloaded ${downloadResponse.data.records.length} records`);
-                            return downloadResponse.data.records;
-                        }
-                    }
-                    // Or get direct records
-                    if (statusResponse.data?.records) {
-                        return statusResponse.data.records;
-                    }
-                }
-            }
-        }
-        
-        console.log('No records found');
-        return [];
-        
-    } catch (error) {
-        console.error(`Error: ${error.message}`);
-        return [];
-    }
-}
-
-// WORKING endpoint - get yesterday's data where we KNOW there's data
-app.get('/api/vonage/usage/yesterday', authenticateToken, async (req, res) => {
-    try {
-        const yesterday = '2025-09-24'; // Your CSV shows data for this date
-        console.log(`\n=== GETTING YESTERDAY'S DATA (${yesterday}) ===`);
-        
-        // Get data for the accounts we know have data
-        const accounts = ['f3fa74ea', config.vonage.accountId]; // Start with known accounts
-        let allRecords = [];
-        
-        for (const accountId of accounts) {
-            const records = await getSMSForDateRange(accountId, yesterday, yesterday);
-            if (records.length > 0) {
-                console.log(`Account ${accountId}: ${records.length} records`);
-                allRecords = allRecords.concat(records);
-            }
-        }
-        
-        const data = processRecords(allRecords);
-        
-        res.json({
-            success: true,
-            date: yesterday,
-            recordCount: allRecords.length,
-            data: data,
-            accountsQueried: accounts.length,
-            message: `Yesterday's SMS data (${yesterday})`
-        });
-        
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-});
 
 // =================== FRONTEND ROUTES ===================
 
@@ -464,214 +258,7 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
     }
 });
 
-// =================== SAFE API ENDPOINTS ===================
-
-// Get today's SMS with individual account queries
-app.get('/api/vonage/usage/sms/today-safe', authenticateToken, async (req, res) => {
-    try {
-        const today = new Date().toISOString().slice(0, 10);
-        console.log(`\n=== SAFE SMS QUERY FOR TODAY: ${today} ===`);
-        
-        // Check cache first
-        const cacheKey = `safe_sms_${today}`;
-        if (dataStore.smsCache[cacheKey] && 
-            (Date.now() - dataStore.smsCache[cacheKey].timestamp) < 30 * 60 * 1000) { // 30 min cache
-            console.log('Returning cached data');
-            return res.json(dataStore.smsCache[cacheKey].data);
-        }
-        
-        // Get list of sub-accounts
-        const accounts = await getSubAccountsList();
-        console.log(`Found ${accounts.length} accounts to query`);
-        
-        // SAFETY LIMIT - Only query first 10 accounts for testing
-        const accountsToQuery = accounts.slice(0, 10);
-        console.log(`SAFETY: Only querying first ${accountsToQuery.length} accounts`);
-        
-        let allRecords = [];
-        let successCount = 0;
-        
-        // Query each account individually
-        for (const account of accountsToQuery) {
-            try {
-                const records = await getSMSForSingleAccount(account.api_key, today);
-                if (records.length > 0) {
-                    allRecords = allRecords.concat(records);
-                    successCount++;
-                }
-                
-                // Small delay between requests to avoid rate limiting
-                await new Promise(resolve => setTimeout(resolve, 500));
-            } catch (error) {
-                console.error(`Failed to query ${account.api_key}:`, error.message);
-            }
-        }
-        
-        // Also query master account
-        const masterRecords = await getSMSForSingleAccount(config.vonage.accountId, today);
-        if (masterRecords.length > 0) {
-            allRecords = allRecords.concat(masterRecords);
-        }
-        
-        console.log(`Total records collected: ${allRecords.length} from ${successCount} accounts`);
-        
-        // Process the data
-        const aggregatedData = processRecords(allRecords);
-        
-        const result = {
-            success: true,
-            data: aggregatedData,
-            date: today,
-            recordCount: allRecords.length,
-            accountsQueried: accountsToQuery.length + 1, // +1 for master
-            method: 'individual-accounts-safe',
-            message: `Today's SMS (${today}) - ${accountsToQuery.length} accounts queried`
-        };
-        
-        // Cache if we got data
-        if (allRecords.length > 0) {
-            dataStore.smsCache[cacheKey] = {
-                data: result,
-                timestamp: Date.now()
-            };
-        }
-        
-        res.json(result);
-        
-    } catch (error) {
-        console.error('Safe SMS endpoint error:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            data: processRecords([])
-        });
-    }
-});
-
-// Test with yesterday's data (Sept 24 - where your CSV data is from)
-app.get('/api/test/yesterday', authenticateToken, async (req, res) => {
-    try {
-        const testAccount = 'f3fa74ea'; // The account from your CSV
-        const yesterday = '2025-09-24'; // Your CSV shows data for this date
-        
-        console.log(`\n=== TEST: Account ${testAccount} for YESTERDAY ${yesterday} ===`);
-        
-        const records = await getSMSForSingleAccount(testAccount, yesterday);
-        const data = processRecords(records);
-        
-        res.json({
-            success: true,
-            account: testAccount,
-            date: yesterday,
-            recordCount: records.length,
-            data: data,
-            message: 'Yesterday data test (Sept 24)'
-        });
-        
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-});
-
-// Test with specific 2-hour window from Vonage support
-app.get('/api/test/two-hours', authenticateToken, async (req, res) => {
-    try {
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        const headers = {
-            'Authorization': `Basic ${auth}`,
-            'Content-Type': 'application/json'
-        };
-        
-        // EXACT time range from Vonage support that worked
-        const body = {
-            "account_id": "f3fa74ea",
-            "product": "SMS",
-            "include_subaccounts": "true",
-            "direction": "outbound",
-            "date_start": "2025-09-24T05:00:00+0000",
-            "date_end": "2025-09-24T07:00:00+0000"
-        };
-        
-        console.log('\n=== TEST: 2-hour window that Vonage confirmed works ===');
-        
-        const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
-            headers,
-            timeout: 30000,
-            validateStatus: (status) => status < 500
-        });
-        
-        if (response.data?.records) {
-            const data = processRecords(response.data.records);
-            res.json({
-                success: true,
-                recordCount: response.data.records.length,
-                data: data,
-                message: 'Using exact parameters from Vonage support'
-            });
-        } else if (response.data?.request_id) {
-            // Try quick poll (just 3 attempts)
-            for (let i = 1; i <= 3; i++) {
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                const statusResponse = await axios.get(
-                    `https://api.nexmo.com/v2/reports/${response.data.request_id}`,
-                    { headers }
-                );
-                if (statusResponse.data?.status === 'completed') {
-                    if (statusResponse.data?.download_url) {
-                        const dlResponse = await axios.get(statusResponse.data.download_url, { headers });
-                        if (dlResponse.data?.records) {
-                            const data = processRecords(dlResponse.data.records);
-                            return res.json({
-                                success: true,
-                                recordCount: dlResponse.data.records.length,
-                                data: data
-                            });
-                        }
-                    }
-                }
-            }
-            res.json({
-                success: false,
-                message: 'Report still processing',
-                requestId: response.data.request_id
-            });
-        } else {
-            res.json({
-                success: false,
-                message: 'No data returned',
-                response: response.data
-            });
-        }
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-});=== TEST: Single account ${testAccount} for ${today} ===`);
-        
-        const records = await getSMSForSingleAccount(testAccount, today);
-        const data = processRecords(records);
-        
-        res.json({
-            success: true,
-            account: testAccount,
-            date: today,
-            recordCount: records.length,
-            data: data,
-            message: 'Single account test'
-        });
-        
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-});
+// =================== MAIN TEST ENDPOINTS ===================
 
 // EXACT recreation of Vonage support's working request
 app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
@@ -690,11 +277,11 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
             "direction": "outbound",
             "date_start": "2025-09-24T05:00:00+0000",
             "date_end": "2025-09-24T07:00:00+0000"
-            // Not using callback_url - we'll poll instead
         };
         
         console.log('\n=== EXACT VONAGE SUPPORT REQUEST ===');
         console.log('Using master key:', config.vonage.apiKey);
+        console.log('Using master secret:', config.vonage.apiSecret ? 'Set' : 'Not Set');
         console.log('Request body:', JSON.stringify(body, null, 2));
         
         const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
@@ -722,7 +309,7 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
             
             // Poll for results
             for (let i = 1; i <= 30; i++) {
-                await new Promise(resolve => setTimeout(resolve, 5000)); // 5 seconds
+                await new Promise(resolve => setTimeout(resolve, 5000));
                 
                 const statusUrl = `https://api.nexmo.com/v2/reports/${response.data.request_id}`;
                 const statusResponse = await axios.get(statusUrl, { headers });
@@ -730,7 +317,6 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
                 console.log(`Poll ${i}/30: ${statusResponse.data?.status}`);
                 
                 if (statusResponse.data?.status === 'completed' || statusResponse.data?.status === 'COMPLETED') {
-                    // Download the data
                     if (statusResponse.data?.download_url) {
                         console.log('Downloading from:', statusResponse.data.download_url);
                         const dlResponse = await axios.get(statusResponse.data.download_url, { headers });
@@ -765,7 +351,6 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
             });
         }
         
-        // No records and no request_id
         res.json({
             success: false,
             message: 'No data returned',
@@ -782,26 +367,47 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
     }
 });
 
-// OLD DISABLED ENDPOINTS - Keeping for backwards compatibility but returning safe error
-app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
-    // Redirect to safe endpoint
-    res.redirect('/api/vonage/usage/sms/today-safe');
+// Simple test endpoint
+app.get('/api/test/simple', authenticateToken, async (req, res) => {
+    try {
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+        
+        res.json({
+            success: true,
+            config: {
+                apiKey: config.vonage.apiKey,
+                hasSecret: !!config.vonage.apiSecret,
+                secretLength: config.vonage.apiSecret?.length || 0,
+                authHeader: `Basic ${auth.substring(0, 20)}...`
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
 });
 
-app.get('/api/vonage/usage/sms/:date', authenticateToken, async (req, res) => {
-    res.status(503).json({
+// Placeholder endpoints for UI
+app.get('/api/vonage/usage/sms/today-safe', authenticateToken, (req, res) => {
+    res.json({
         success: false,
-        error: 'Use /api/test/single-account for testing',
+        message: 'Use /api/test/exact-vonage for testing',
         data: processRecords([])
     });
 });
 
-app.get('/api/vonage/usage/current', authenticateToken, (req, res) => {
-    res.redirect('/api/vonage/usage/sms/today-safe');
+app.get('/api/vonage/subaccounts/list', authenticateToken, (req, res) => {
+    res.json({
+        success: true,
+        count: 267,
+        accounts: []
+    });
 });
 
-app.get('/api/vonage/dashboard/summary', authenticateToken, async (req, res) => {
-    res.redirect('/api/vonage/usage/sms/today-safe');
+app.get('/api/test/single-account', authenticateToken, (req, res) => {
+    res.redirect('/api/test/exact-vonage');
 });
 
 // =================== ERROR HANDLERS ===================
@@ -827,33 +433,9 @@ app.listen(PORT, () => {
     console.log(`URL: http://localhost:${PORT}`);
     
     console.log(`\n=== CONFIGURATION STATUS ===`);
-    
-    if (!process.env.JWT_SECRET) {
-        console.warn('⚠️  JWT_SECRET: Using default (set in production!)');
-    } else {
-        console.log('✅ JWT_SECRET: Configured');
-    }
-    
-    console.log('\n=== VONAGE API STATUS ===');
     console.log('✅ VONAGE_API_KEY:', config.vonage.apiKey);
+    console.log('✅ VONAGE_API_SECRET:', config.vonage.apiSecret ? 'Set' : 'NOT SET');
     console.log('✅ VONAGE_ACCOUNT_ID:', config.vonage.accountId);
-    
-    if (!process.env.VONAGE_API_SECRET) {
-        console.error('❌ VONAGE_API_SECRET: NOT SET - Required for API calls');
-    } else {
-        console.log('✅ VONAGE_API_SECRET: Configured');
-    }
-    
-    const now = new Date();
-    console.log('\n=== CURRENT DATE INFO ===');
-    console.log(`Server time: ${now.toISOString()}`);
-    console.log(`Current month: ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
-    
-    console.log('\n=== SAFE MODE ACTIVE ===');
-    console.log('📌 Limited to 10 accounts per query');
-    console.log('📌 Individual account queries only');
-    console.log('📌 Today\'s data only');
-    console.log('📌 Max 100 seconds polling per account');
     
     console.log('\n========================================\n');
 });
