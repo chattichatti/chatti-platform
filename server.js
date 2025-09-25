@@ -307,16 +307,32 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
         if (response.data?.request_id) {
             console.log('Got async request_id:', response.data.request_id);
             
-            // Poll for results
+            // Poll for results - FIX THE STATUS CHECK
             for (let i = 1; i <= 30; i++) {
                 await new Promise(resolve => setTimeout(resolve, 5000));
                 
                 const statusUrl = `https://api.nexmo.com/v2/reports/${response.data.request_id}`;
-                const statusResponse = await axios.get(statusUrl, { headers });
+                const statusResponse = await axios.get(statusUrl, { 
+                    headers,
+                    validateStatus: () => true 
+                });
                 
-                console.log(`Poll ${i}/30: ${statusResponse.data?.status}`);
+                // Log the ENTIRE response to see what we're getting
+                console.log(`Poll ${i}/30 - Full response:`, JSON.stringify(statusResponse.data));
                 
-                if (statusResponse.data?.status === 'completed' || statusResponse.data?.status === 'COMPLETED') {
+                // Check various possible status fields
+                const status = statusResponse.data?.status || 
+                              statusResponse.data?.report_status || 
+                              statusResponse.data?.state ||
+                              'unknown';
+                              
+                console.log(`Poll ${i}/30: status=${status}`);
+                
+                // Check if completed
+                if (status === 'completed' || status === 'COMPLETED' || 
+                    status === 'complete' || status === 'COMPLETE' ||
+                    statusResponse.data?.download_url) {
+                    
                     if (statusResponse.data?.download_url) {
                         console.log('Downloading from:', statusResponse.data.download_url);
                         const dlResponse = await axios.get(statusResponse.data.download_url, { headers });
@@ -330,6 +346,16 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
                                 type: 'async-downloaded'
                             });
                         }
+                        
+                        // If download returns CSV or other format
+                        if (typeof dlResponse.data === 'string') {
+                            return res.json({
+                                success: false,
+                                message: 'Got CSV data - need to parse',
+                                dataLength: dlResponse.data.length,
+                                sample: dlResponse.data.substring(0, 200)
+                            });
+                        }
                     }
                     
                     if (statusResponse.data?.records) {
@@ -341,6 +367,23 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
                             type: 'async-direct'
                         });
                     }
+                    
+                    // Report says complete but no data found
+                    return res.json({
+                        success: false,
+                        message: 'Report completed but no records found',
+                        fullResponse: statusResponse.data
+                    });
+                }
+                
+                // Check if failed
+                if (status === 'failed' || status === 'FAILED' || status === 'error') {
+                    return res.json({
+                        success: false,
+                        message: 'Report generation failed',
+                        status: status,
+                        fullResponse: statusResponse.data
+                    });
                 }
             }
             
