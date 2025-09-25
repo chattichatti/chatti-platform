@@ -355,14 +355,32 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
                         
                         // If it's CSV format (string), parse it
                         if (typeof dlResponse.data === 'string' && dlResponse.data.includes(',')) {
-                            // For now, just return that we got CSV data
-                            console.log('Got CSV data, length:', dlResponse.data.length);
+                            console.log('Got CSV data, parsing...');
+                            
+                            // Simple CSV parser for the SMS data
+                            const lines = dlResponse.data.split('\n');
+                            const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+                            const records = [];
+                            
+                            for (let i = 1; i < lines.length; i++) {
+                                if (lines[i].trim()) {
+                                    const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
+                                    const record = {};
+                                    headers.forEach((header, index) => {
+                                        record[header] = values[index] || '';
+                                    });
+                                    records.push(record);
+                                }
+                            }
+                            
+                            console.log(`Parsed ${records.length} records from CSV`);
+                            const data = processRecords(records);
+                            
                             return res.json({
                                 success: true,
-                                message: 'Got CSV data - 1703 records available',
-                                recordCount: statusResponse.data?.items_count || 1703,
-                                csvLength: dlResponse.data.length,
-                                type: 'csv-needs-parsing'
+                                recordCount: records.length,
+                                data: data,
+                                type: 'csv-parsed'
                             });
                         }
                     }
