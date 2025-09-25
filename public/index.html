@@ -662,19 +662,19 @@
             await refreshTodayData();
         }
 
-        // Refresh today's SMS data
+        // Refresh today's SMS data - SAFE VERSION
         async function refreshTodayData() {
-            console.log('Fetching today\'s SMS data...');
+            console.log('Fetching today\'s SMS data (SAFE MODE)...');
             
             const smsContainer = document.getElementById('smsUsageContent');
             const accountContainer = document.getElementById('accountUsageContent');
             
-            smsContainer.innerHTML = '<div class="loading">Loading today\'s SMS data</div>';
+            smsContainer.innerHTML = '<div class="loading">Loading today\'s SMS data (safe mode - limited accounts)</div>';
             accountContainer.innerHTML = '<div class="loading">Loading account data</div>';
             
             try {
-                // Fetch today's data
-                const data = await apiCall('/api/vonage/usage/sms');
+                // Use the SAFE endpoint that queries accounts individually
+                const data = await apiCall('/api/vonage/usage/sms/today-safe');
                 console.log('API Response:', data);
                 
                 if (data.success && data.data) {

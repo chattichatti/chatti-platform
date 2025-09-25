@@ -494,59 +494,276 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
     }
 });
 
-// =================== SMS USAGE ENDPOINTS ===================
+// =================== SAFE SMS REPORTING - ONE ACCOUNT AT A TIME ===================
 
-// EMERGENCY DISABLED - $20k spent in 24 hours
-app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
-    console.error('⚠️ REPORTS API DISABLED - Excessive charges detected');
-    res.status(503).json({
-        success: false,
-        error: 'Reports API temporarily disabled due to excessive charges',
-        message: 'Contact Vonage support about the $20k charge issue',
-        data: processRecords([]) // Return empty data
-    });
+// Helper to get sub-accounts list
+async function getSubAccountsList() {
+    try {
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
+        
+        const response = await axios.get(url, {
+            headers: { 'Authorization': `Basic ${auth}` },
+            timeout: 10000
+        });
+        
+        let accounts = [];
+        if (response.data?._embedded?.subaccounts) {
+            accounts = response.data._embedded.subaccounts;
+        }
+        
+        // Add the specific account from CSV if not in list
+        const csvAccount = 'f3fa74ea';
+        if (!accounts.find(a => a.api_key === csvAccount)) {
+            accounts.push({ api_key: csvAccount, name: 'Account from CSV' });
+        }
+        
+        return accounts;
+    } catch (error) {
+        console.error('Error fetching sub-accounts:', error.message);
+        return [];
+    }
+}
+
+// SAFE function to get SMS for ONE account for TODAY only - WITH POLLING
+async function getSMSForSingleAccount(accountId, dateStr) {
+    try {
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+        const headers = {
+            'Authorization': `Basic ${auth}`,
+            'Content-Type': 'application/json'
+        };
+        
+        const body = {
+            "account_id": accountId,
+            "product": "SMS",
+            "direction": "outbound",
+            "date_start": `${dateStr}T00:00:00+0000`,
+            "date_end": `${dateStr}T23:59:59+0000`
+            // NO include_subaccounts - just this one account
+        };
+        
+        console.log(`Requesting SMS for account ${accountId} on ${dateStr}`);
+        
+        const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
+            headers,
+            timeout: 30000,
+            validateStatus: (status) => status < 500
+        });
+        
+        // If we get immediate results (synchronous)
+        if (response.data?.records && Array.isArray(response.data.records)) {
+            console.log(`✅ Got ${response.data.records.length} synchronous records for ${accountId}`);
+            return response.data.records;
+        }
+        
+        // If async, poll CAREFULLY (single account should be quick)
+        if (response.data?.request_id) {
+            console.log(`⏳ Got async request for ${accountId}, polling...`);
+            return await pollSingleAccountReport(response.data.request_id, headers, accountId);
+        }
+        
+        return [];
+    } catch (error) {
+        console.error(`Error getting SMS for ${accountId}:`, error.message);
+        return [];
+    }
+}
+
+// SAFE polling for single account reports (should complete quickly)
+async function pollSingleAccountReport(requestId, headers, accountId) {
+    const maxAttempts = 10; // Only 100 seconds for single accounts
+    const pollInterval = 10000; // 10 seconds
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const statusUrl = `https://api.nexmo.com/v2/reports/${requestId}`;
+            const response = await axios.get(statusUrl, {
+                headers,
+                timeout: 10000,
+                validateStatus: (status) => status < 500
+            });
+            
+            const status = response.data?.status || 'unknown';
+            console.log(`  Poll ${attempt}/${maxAttempts} for ${accountId}: ${status}`);
+            
+            if (status === 'completed' || status === 'COMPLETED') {
+                // Check for download URL
+                if (response.data?.download_url) {
+                    console.log(`  📥 Downloading report for ${accountId}`);
+                    try {
+                        const downloadResponse = await axios.get(response.data.download_url, {
+                            headers,
+                            timeout: 30000
+                        });
+                        
+                        if (downloadResponse.data?.records) {
+                            console.log(`  ✅ Downloaded ${downloadResponse.data.records.length} records for ${accountId}`);
+                            return downloadResponse.data.records;
+                        }
+                    } catch (dlError) {
+                        console.error(`  ❌ Download failed for ${accountId}:`, dlError.message);
+                    }
+                }
+                
+                // Check for direct records
+                if (response.data?.records) {
+                    console.log(`  ✅ Got ${response.data.records.length} records for ${accountId}`);
+                    return response.data.records;
+                }
+                
+                return [];
+            }
+            
+            if (status === 'failed' || status === 'FAILED') {
+                console.error(`  ❌ Report failed for ${accountId}`);
+                return [];
+            }
+            
+            // Wait before next poll
+            if (attempt < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, pollInterval));
+            }
+        } catch (error) {
+            console.error(`  Poll error for ${accountId}:`, error.message);
+            if (attempt === maxAttempts) return [];
+        }
+    }
+    
+    console.warn(`  ⏱️ Timeout polling ${accountId} after ${maxAttempts} attempts`);
+    return [];
+}
+
+// =================== SAFE API ENDPOINTS ===================
+
+// Get today's SMS with individual account queries
+app.get('/api/vonage/usage/sms/today-safe', authenticateToken, async (req, res) => {
+    try {
+        const today = new Date().toISOString().slice(0, 10);
+        console.log(`\n=== SAFE SMS QUERY FOR TODAY: ${today} ===`);
+        
+        // Check cache first
+        const cacheKey = `safe_sms_${today}`;
+        if (dataStore.smsCache[cacheKey] && 
+            (Date.now() - dataStore.smsCache[cacheKey].timestamp) < 30 * 60 * 1000) { // 30 min cache
+            console.log('Returning cached data');
+            return res.json(dataStore.smsCache[cacheKey].data);
+        }
+        
+        // Get list of sub-accounts
+        const accounts = await getSubAccountsList();
+        console.log(`Found ${accounts.length} accounts to query`);
+        
+        // SAFETY LIMIT - Only query first 10 accounts for testing
+        const accountsToQuery = accounts.slice(0, 10);
+        console.log(`SAFETY: Only querying first ${accountsToQuery.length} accounts`);
+        
+        let allRecords = [];
+        let successCount = 0;
+        
+        // Query each account individually
+        for (const account of accountsToQuery) {
+            try {
+                const records = await getSMSForSingleAccount(account.api_key, today);
+                if (records.length > 0) {
+                    allRecords = allRecords.concat(records);
+                    successCount++;
+                }
+                
+                // Small delay between requests to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 500));
+            } catch (error) {
+                console.error(`Failed to query ${account.api_key}:`, error.message);
+            }
+        }
+        
+        // Also query master account
+        const masterRecords = await getSMSForSingleAccount(config.vonage.accountId, today);
+        if (masterRecords.length > 0) {
+            allRecords = allRecords.concat(masterRecords);
+        }
+        
+        console.log(`Total records collected: ${allRecords.length} from ${successCount} accounts`);
+        
+        // Process the data
+        const aggregatedData = processRecords(allRecords);
+        
+        const result = {
+            success: true,
+            data: aggregatedData,
+            date: today,
+            recordCount: allRecords.length,
+            accountsQueried: accountsToQuery.length + 1, // +1 for master
+            method: 'individual-accounts-safe',
+            message: `Today's SMS (${today}) - ${accountsToQuery.length} accounts queried`
+        };
+        
+        // Cache if we got data
+        if (allRecords.length > 0) {
+            dataStore.smsCache[cacheKey] = {
+                data: result,
+                timestamp: Date.now()
+            };
+        }
+        
+        res.json(result);
+        
+    } catch (error) {
+        console.error('Safe SMS endpoint error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            data: processRecords([])
+        });
+    }
 });
 
-// DISABLED
-app.get('/api/vonage/usage/sms/:date', authenticateToken, async (req, res) => {
-    console.error('⚠️ REPORTS API DISABLED - Excessive charges detected');
-    res.status(503).json({
-        success: false,
-        error: 'Reports API temporarily disabled',
-        data: processRecords([])
-    });
+// Test with just ONE account (f3fa74ea from CSV)
+app.get('/api/test/single-account', authenticateToken, async (req, res) => {
+    try {
+        const testAccount = 'f3fa74ea'; // The account from your CSV
+        const today = new Date().toISOString().slice(0, 10);
+        
+        console.log(`\n=== TEST: Single account ${testAccount} for ${today} ===`);
+        
+        const records = await getSMSForSingleAccount(testAccount, today);
+        const data = processRecords(records);
+        
+        res.json({
+            success: true,
+            account: testAccount,
+            date: today,
+            recordCount: records.length,
+            data: data,
+            message: 'Single account test'
+        });
+        
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
 });
 
-// DISABLED
-app.get('/api/vonage/usage/current', authenticateToken, (req, res) => {
-    res.status(503).json({
-        success: false,
-        error: 'Reports API temporarily disabled'
-    });
-});
-
-// DISABLED
-app.get('/api/vonage/dashboard/summary', authenticateToken, async (req, res) => {
-    res.json({
-        success: false,
-        error: 'Reports API temporarily disabled',
-        totalSMS: 0,
-        totalCost: 0,
-        message: 'API disabled due to excessive charges'
-    });
-});
-
-// DISABLED ALL TEST ENDPOINTS
-app.get('/api/test/quick', authenticateToken, async (req, res) => {
-    res.status(503).json({ error: 'All Reports API calls disabled' });
-});
-
-app.get('/api/test/diagnostic', authenticateToken, async (req, res) => {
-    res.json({
-        error: 'Reports API disabled',
-        reason: '$20,000 spent in 24 hours',
-        action: 'Contact Vonage support immediately'
-    });
+// List all sub-accounts (for debugging)
+app.get('/api/vonage/subaccounts/list', authenticateToken, async (req, res) => {
+    try {
+        const accounts = await getSubAccountsList();
+        res.json({
+            success: true,
+            count: accounts.length,
+            accounts: accounts.map(a => ({
+                api_key: a.api_key,
+                name: a.name || 'Unnamed'
+            }))
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
 });
 
 // Diagnostic endpoint to test the Reports API directly
