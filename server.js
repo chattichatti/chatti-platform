@@ -125,21 +125,24 @@ function processRecords(records) {
     for (const record of records) {
         aggregated.total++;
         
-        if (record.direction === 'outbound' || record.type === 'MT') {
+        // Handle direction field
+        if (record.direction === 'outbound' || record.direction === 'OUTBOUND' || record.type === 'MT') {
             aggregated.outbound++;
         } else {
             aggregated.inbound++;
         }
         
-        const cost = parseFloat(record.price || record.total_price || record.cost || 0);
+        // Handle cost - Vonage CSV uses 'total_price' field
+        const cost = parseFloat(record.total_price || record.price || record.cost || 0);
         aggregated.totalCost += cost;
         
-        const country = record.country || record.to_country || getCountryFromNumber(record.to);
-        const countryName = record.country_name || getCountryName(country);
+        // Handle country - Vonage CSV uses 'country' and 'country_name' fields
+        const countryCode = record.country || record.to_country || getCountryFromNumber(record.to);
+        const countryName = record.country_name || getCountryName(countryCode);
         
         if (!aggregated.byCountry[countryName]) {
             aggregated.byCountry[countryName] = {
-                code: country,
+                code: countryCode,
                 name: countryName,
                 count: 0,
                 cost: 0
@@ -148,7 +151,8 @@ function processRecords(records) {
         aggregated.byCountry[countryName].count++;
         aggregated.byCountry[countryName].cost += cost;
         
-        const accountId = record.account_id || record.api_key || 'master';
+        // Handle account ID - Vonage CSV uses 'account_id' field
+        const accountId = record.account_id || record.api_key || 'unknown';
         
         if (!aggregated.bySubAccount[accountId]) {
             aggregated.bySubAccount[accountId] = {
@@ -160,6 +164,7 @@ function processRecords(records) {
         aggregated.bySubAccount[accountId].count++;
         aggregated.bySubAccount[accountId].cost += cost;
         
+        // Handle date fields
         const messageDate = record.date_finalized || record.date_received || record.date_start || record.timestamp;
         if (messageDate) {
             const dateKey = messageDate.slice(0, 10);
@@ -455,8 +460,8 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
     }
 });
 
-// Quick check - just see what the API returns without complex polling
-app.get('/api/test/quick-check', authenticateToken, async (req, res) => {
+// Debug endpoint to see actual CSV structure
+app.get('/api/test/csv-debug', authenticateToken, async (req, res) => {
     try {
         const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
         const headers = {
@@ -464,50 +469,90 @@ app.get('/api/test/quick-check', authenticateToken, async (req, res) => {
             'Content-Type': 'application/json'
         };
         
-        // Test with just 1 hour of data
+        // Get today's data
+        const today = new Date().toISOString().slice(0, 10);
         const body = {
             "account_id": "f3fa74ea",
             "product": "SMS",
             "include_subaccounts": "true",
             "direction": "outbound",
-            "date_start": "2025-09-24T05:00:00+0000",
-            "date_end": "2025-09-24T06:00:00+0000"  // Just 1 hour
+            "date_start": `${today}T00:00:00+0000`,
+            "date_end": `${today}T01:00:00+0000`  // Just 1 hour for quick test
         };
-        
-        console.log('Quick check request...');
         
         const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
             headers,
-            timeout: 10000
+            timeout: 30000
         });
         
-        // If we got a request_id, try polling just ONCE to see the structure
         if (response.data?.request_id) {
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            
-            const statusResponse = await axios.get(
-                `https://api.nexmo.com/v2/reports/${response.data.request_id}`,
-                { headers, validateStatus: () => true }
-            );
-            
-            return res.json({
-                step1: 'Got request_id',
-                requestId: response.data.request_id,
-                step2: 'Polled once after 5 seconds',
-                pollResponse: statusResponse.data,
-                pollStatus: statusResponse.status
-            });
+            // Quick poll
+            for (let i = 1; i <= 10; i++) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                const statusUrl = `https://api.nexmo.com/v2/reports/${response.data.request_id}`;
+                const statusResponse = await axios.get(statusUrl, { headers });
+                
+                if (statusResponse.data?.request_status === 'SUCCESS') {
+                    const downloadUrl = statusResponse.data?._links?.download_report?.href;
+                    
+                    if (downloadUrl) {
+                        const dlResponse = await axios.get(downloadUrl, { headers });
+                        
+                        if (typeof dlResponse.data === 'string') {
+                            const lines = dlResponse.data.split('\n').filter(line => line.trim());
+                            
+                            // Get headers
+                            const parseCSVLine = (line) => {
+                                const result = [];
+                                let current = '';
+                                let inQuotes = false;
+                                
+                                for (let j = 0; j < line.length; j++) {
+                                    const char = line[j];
+                                    if (char === '"') {
+                                        inQuotes = !inQuotes;
+                                    } else if (char === ',' && !inQuotes) {
+                                        result.push(current.trim());
+                                        current = '';
+                                    } else {
+                                        current += char;
+                                    }
+                                }
+                                result.push(current.trim());
+                                return result;
+                            };
+                            
+                            const headers = parseCSVLine(lines[0]);
+                            const sampleRows = [];
+                            
+                            // Get first 3 rows as samples
+                            for (let i = 1; i <= Math.min(3, lines.length - 1); i++) {
+                                const values = parseCSVLine(lines[i]);
+                                const record = {};
+                                headers.forEach((header, index) => {
+                                    record[header] = values[index] || '';
+                                });
+                                sampleRows.push(record);
+                            }
+                            
+                            return res.json({
+                                success: true,
+                                csvHeaders: headers,
+                                totalLines: lines.length,
+                                sampleRows: sampleRows,
+                                message: 'Check which fields contain country, cost, and account data'
+                            });
+                        }
+                    }
+                }
+            }
         }
         
-        // If synchronous
-        return res.json({
-            type: 'synchronous',
-            hasRecords: !!response.data?.records,
-            recordCount: response.data?.records?.length || 0
-        });
+        res.json({ success: false, message: 'Could not get CSV data' });
         
     } catch (error) {
-        res.json({ error: error.message });
+        res.json({ success: false, error: error.message });
     }
 });
 
