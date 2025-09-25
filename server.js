@@ -280,10 +280,13 @@ async function fetchSMSReports(dateStart, dateEnd) {
     }
 }
 
-// New function to poll for async results
+// New function to poll for async results - INCREASED TIMEOUT
 async function pollForAsyncResults(requestId, headers) {
-    const maxAttempts = 30;  // Poll for up to 5 minutes
+    const maxAttempts = 90;  // Increased to 15 minutes (90 * 10 seconds)
     const pollInterval = 10000; // Check every 10 seconds
+    
+    console.log(`Starting to poll for request_id: ${requestId}`);
+    console.log(`Will poll up to ${maxAttempts} times (${maxAttempts * pollInterval / 60000} minutes)`);
     
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
@@ -299,8 +302,10 @@ async function pollForAsyncResults(requestId, headers) {
             console.log(`Poll response status: ${response.status}`);
             
             if (response.status === 200) {
+                const status = response.data?.status || 'unknown';
+                
                 // Check if the report is ready
-                if (response.data?.status === 'completed' || response.data?.status === 'COMPLETED') {
+                if (status === 'completed' || status === 'COMPLETED') {
                     console.log('✅ Report completed!');
                     
                     // Check if we have a download URL
@@ -319,14 +324,26 @@ async function pollForAsyncResults(requestId, headers) {
                     console.log('Response data:', JSON.stringify(response.data, null, 2));
                     return [];
                     
-                } else if (response.data?.status === 'failed' || response.data?.status === 'FAILED') {
+                } else if (status === 'failed' || status === 'FAILED') {
                     console.error('❌ Report generation failed');
+                    console.error('Failure details:', response.data);
                     return [];
                     
                 } else {
-                    console.log(`⏳ Report status: ${response.data?.status || 'processing'}`);
-                    if (response.data?.records_count) {
+                    console.log(`⏳ Report status: ${status}`);
+                    
+                    // Log additional progress info if available
+                    if (response.data?.records_count !== undefined) {
                         console.log(`   Records being processed: ${response.data.records_count}`);
+                    }
+                    if (response.data?.progress !== undefined) {
+                        console.log(`   Progress: ${response.data.progress}%`);
+                    }
+                    
+                    // Every 10 attempts, log that we're still waiting
+                    if (attempt % 10 === 0) {
+                        console.log(`⏰ Still processing after ${attempt * pollInterval / 60000} minutes...`);
+                        console.log('   Large reports with millions of records can take 10-15 minutes');
                     }
                 }
             } else if (response.status === 404) {
@@ -348,7 +365,9 @@ async function pollForAsyncResults(requestId, headers) {
         }
     }
     
-    console.error('❌ Polling timeout - report took too long to generate');
+    console.error(`❌ Polling timeout after ${maxAttempts * pollInterval / 60000} minutes`);
+    console.error('The report is still processing. This can happen with very large datasets.');
+    console.error('Try querying a smaller date range or specific sub-accounts.');
     return [];
 }
 
@@ -477,134 +496,57 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
 
 // =================== SMS USAGE ENDPOINTS ===================
 
-// Main SMS usage endpoint - simplified for TODAY ONLY
+// EMERGENCY DISABLED - $20k spent in 24 hours
 app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
-    try {
-        // Get today's date (September 25, 2025)
-        const today = new Date().toISOString().slice(0, 10); // 2025-09-25
-        
-        console.log(`\n=== SMS USAGE REQUEST FOR TODAY: ${today} ===`);
-        
-        // Check cache first
-        const cacheKey = `sms_${today}`;
-        if (dataStore.smsCache[cacheKey] && 
-            (Date.now() - dataStore.smsCache[cacheKey].timestamp) < 5 * 60 * 1000) {
-            console.log('Returning cached data for today');
-            return res.json(dataStore.smsCache[cacheKey].data);
-        }
-        
-        // Fetch data for today only
-        const records = await fetchSMSReports(today, today);
-        
-        console.log(`Total records retrieved: ${records.length}`);
-        
-        // Process and return the records
-        const aggregatedData = processRecords(records);
-        
-        const result = {
-            success: true,
-            data: aggregatedData,
-            date: today,
-            recordCount: aggregatedData.total,
-            method: 'include_subaccounts',
-            message: `SMS usage for today (${today})`
-        };
-        
-        // Cache the result if we got data
-        if (aggregatedData.total > 0) {
-            dataStore.smsCache[cacheKey] = {
-                data: result,
-                timestamp: Date.now()
-            };
-        }
-        
-        res.json(result);
-        
-    } catch (error) {
-        console.error('SMS usage endpoint error:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            data: processRecords([])
-        });
-    }
+    console.error('⚠️ REPORTS API DISABLED - Excessive charges detected');
+    res.status(503).json({
+        success: false,
+        error: 'Reports API temporarily disabled due to excessive charges',
+        message: 'Contact Vonage support about the $20k charge issue',
+        data: processRecords([]) // Return empty data
+    });
 });
 
-// Get usage for a specific date
+// DISABLED
 app.get('/api/vonage/usage/sms/:date', authenticateToken, async (req, res) => {
-    try {
-        const { date } = req.params;
-        
-        console.log(`\n=== SMS USAGE REQUEST FOR DATE: ${date} ===`);
-        
-        // Validate date format
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid date format. Use YYYY-MM-DD'
-            });
-        }
-        
-        // Fetch data for specific date
-        const records = await fetchSMSReports(date, date);
-        
-        console.log(`Total records retrieved: ${records.length}`);
-        
-        // Process and return the records
-        const aggregatedData = processRecords(records);
-        
-        res.json({
-            success: true,
-            data: aggregatedData,
-            date: date,
-            recordCount: aggregatedData.total,
-            method: 'include_subaccounts'
-        });
-        
-    } catch (error) {
-        console.error('SMS usage endpoint error:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            data: processRecords([])
-        });
-    }
+    console.error('⚠️ REPORTS API DISABLED - Excessive charges detected');
+    res.status(503).json({
+        success: false,
+        error: 'Reports API temporarily disabled',
+        data: processRecords([])
+    });
 });
 
-// Current month usage (redirect to today for simplicity)
+// DISABLED
 app.get('/api/vonage/usage/current', authenticateToken, (req, res) => {
-    res.redirect('/api/vonage/usage/sms');
+    res.status(503).json({
+        success: false,
+        error: 'Reports API temporarily disabled'
+    });
 });
 
-// Dashboard summary - simplified for today
+// DISABLED
 app.get('/api/vonage/dashboard/summary', authenticateToken, async (req, res) => {
-    try {
-        const today = new Date().toISOString().slice(0, 10);
-        
-        // Fetch data for today
-        const records = await fetchSMSReports(today, today);
-        const data = processRecords(records);
-        
-        const summary = {
-            success: true,
-            date: today,
-            totalSMS: data.total,
-            totalCost: data.totalCost,
-            activeCustomers: Object.keys(data.bySubAccount).length,
-            lastUpdated: new Date().toISOString(),
-            message: `Today's SMS usage (${today})`
-        };
-        
-        res.json(summary);
-        
-    } catch (error) {
-        res.json({
-            success: false,
-            error: error.message,
-            totalSMS: 0,
-            totalCost: 0
-        });
-    }
+    res.json({
+        success: false,
+        error: 'Reports API temporarily disabled',
+        totalSMS: 0,
+        totalCost: 0,
+        message: 'API disabled due to excessive charges'
+    });
+});
+
+// DISABLED ALL TEST ENDPOINTS
+app.get('/api/test/quick', authenticateToken, async (req, res) => {
+    res.status(503).json({ error: 'All Reports API calls disabled' });
+});
+
+app.get('/api/test/diagnostic', authenticateToken, async (req, res) => {
+    res.json({
+        error: 'Reports API disabled',
+        reason: '$20,000 spent in 24 hours',
+        action: 'Contact Vonage support immediately'
+    });
 });
 
 // Diagnostic endpoint to test the Reports API directly
