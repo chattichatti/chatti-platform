@@ -353,24 +353,42 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
                             });
                         }
                         
-                        // If it's CSV format (string), parse it
+                        // If it's CSV format (string), parse it properly
                         if (typeof dlResponse.data === 'string' && dlResponse.data.includes(',')) {
                             console.log('Got CSV data, parsing...');
                             
-                            // Simple CSV parser for the SMS data
-                            const lines = dlResponse.data.split('\n');
-                            const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+                            // Better CSV parser that handles quotes and commas in values
+                            const parseCSVLine = (line) => {
+                                const result = [];
+                                let current = '';
+                                let inQuotes = false;
+                                
+                                for (let i = 0; i < line.length; i++) {
+                                    const char = line[i];
+                                    if (char === '"') {
+                                        inQuotes = !inQuotes;
+                                    } else if (char === ',' && !inQuotes) {
+                                        result.push(current.trim());
+                                        current = '';
+                                    } else {
+                                        current += char;
+                                    }
+                                }
+                                result.push(current.trim());
+                                return result;
+                            };
+                            
+                            const lines = dlResponse.data.split('\n').filter(line => line.trim());
+                            const headers = parseCSVLine(lines[0]);
                             const records = [];
                             
                             for (let i = 1; i < lines.length; i++) {
-                                if (lines[i].trim()) {
-                                    const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
-                                    const record = {};
-                                    headers.forEach((header, index) => {
-                                        record[header] = values[index] || '';
-                                    });
-                                    records.push(record);
-                                }
+                                const values = parseCSVLine(lines[i]);
+                                const record = {};
+                                headers.forEach((header, index) => {
+                                    record[header] = values[index] || '';
+                                });
+                                records.push(record);
                             }
                             
                             console.log(`Parsed ${records.length} records from CSV`);
@@ -493,13 +511,141 @@ app.get('/api/test/quick-check', authenticateToken, async (req, res) => {
     }
 });
 
-// Placeholder endpoints for UI
-app.get('/api/vonage/usage/sms/today-safe', authenticateToken, (req, res) => {
-    res.json({
-        success: false,
-        message: 'Use /api/test/exact-vonage for testing',
-        data: processRecords([])
-    });
+// Main endpoint the UI uses - wire it to the WORKING logic
+app.get('/api/vonage/usage/sms/today-safe', authenticateToken, async (req, res) => {
+    try {
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+        const headers = {
+            'Authorization': `Basic ${auth}`,
+            'Content-Type': 'application/json'
+        };
+        
+        // Use TODAY's date
+        const today = new Date().toISOString().slice(0, 10);
+        
+        // Query for today's data - same pattern that worked for Sept 24
+        const body = {
+            "account_id": "f3fa74ea",
+            "product": "SMS",
+            "include_subaccounts": "true",
+            "direction": "outbound",
+            "date_start": `${today}T00:00:00+0000`,
+            "date_end": `${today}T23:59:59+0000`
+        };
+        
+        console.log(`\n=== UI REQUEST FOR TODAY: ${today} ===`);
+        
+        const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
+            headers,
+            timeout: 30000,
+            validateStatus: () => true
+        });
+        
+        // If async response (which it usually is)
+        if (response.data?.request_id) {
+            console.log('Got async request_id, polling...');
+            
+            // Poll for results (max 20 attempts for UI responsiveness)
+            for (let i = 1; i <= 20; i++) {
+                await new Promise(resolve => setTimeout(resolve, 3000)); // 3 seconds
+                
+                const statusUrl = `https://api.nexmo.com/v2/reports/${response.data.request_id}`;
+                const statusResponse = await axios.get(statusUrl, { headers });
+                
+                // Check if SUCCESS (the actual field name Vonage uses)
+                if (statusResponse.data?.request_status === 'SUCCESS') {
+                    const downloadUrl = statusResponse.data?._links?.download_report?.href;
+                    
+                    if (downloadUrl) {
+                        console.log(`Downloading ${statusResponse.data.items_count} records...`);
+                        const dlResponse = await axios.get(downloadUrl, { headers, timeout: 60000 });
+                        
+                        // Parse CSV properly
+                        if (typeof dlResponse.data === 'string') {
+                            const parseCSVLine = (line) => {
+                                const result = [];
+                                let current = '';
+                                let inQuotes = false;
+                                
+                                for (let i = 0; i < line.length; i++) {
+                                    const char = line[i];
+                                    if (char === '"') {
+                                        inQuotes = !inQuotes;
+                                    } else if (char === ',' && !inQuotes) {
+                                        result.push(current.trim());
+                                        current = '';
+                                    } else {
+                                        current += char;
+                                    }
+                                }
+                                result.push(current.trim());
+                                return result;
+                            };
+                            
+                            const lines = dlResponse.data.split('\n').filter(line => line.trim());
+                            const headers = parseCSVLine(lines[0]);
+                            const records = [];
+                            
+                            for (let i = 1; i < lines.length; i++) {
+                                const values = parseCSVLine(lines[i]);
+                                const record = {};
+                                headers.forEach((header, index) => {
+                                    record[header] = values[index] || '';
+                                });
+                                records.push(record);
+                            }
+                            
+                            const data = processRecords(records);
+                            
+                            return res.json({
+                                success: true,
+                                data: data,
+                                date: today,
+                                recordCount: records.length,
+                                accountsQueried: 1,
+                                method: 'vonage-reports-api'
+                            });
+                        }
+                    }
+                }
+            }
+            
+            // If no data after polling
+            return res.json({
+                success: false,
+                message: 'No SMS data for today yet',
+                data: processRecords([]),
+                date: today
+            });
+        }
+        
+        // If synchronous response (rare)
+        if (response.data?.records) {
+            const data = processRecords(response.data.records);
+            return res.json({
+                success: true,
+                data: data,
+                date: today,
+                recordCount: response.data.records.length
+            });
+        }
+        
+        // No data
+        res.json({
+            success: false,
+            message: 'No SMS data available',
+            data: processRecords([]),
+            date: today
+        });
+        
+    } catch (error) {
+        console.error('UI endpoint error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            data: processRecords([])
+        });
+    }
 });
 
 app.get('/api/vonage/subaccounts/list', authenticateToken, (req, res) => {
@@ -510,8 +656,119 @@ app.get('/api/vonage/subaccounts/list', authenticateToken, (req, res) => {
     });
 });
 
-app.get('/api/test/single-account', authenticateToken, (req, res) => {
-    res.redirect('/api/test/exact-vonage');
+// Yesterday endpoint for UI
+app.get('/api/vonage/usage/sms/:date', authenticateToken, async (req, res) => {
+    try {
+        const { date } = req.params;
+        
+        // Validate date format
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid date format. Use YYYY-MM-DD'
+            });
+        }
+        
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+        const headers = {
+            'Authorization': `Basic ${auth}`,
+            'Content-Type': 'application/json'
+        };
+        
+        const body = {
+            "account_id": "f3fa74ea",
+            "product": "SMS",
+            "include_subaccounts": "true",
+            "direction": "outbound",
+            "date_start": `${date}T00:00:00+0000`,
+            "date_end": `${date}T23:59:59+0000`
+        };
+        
+        console.log(`\n=== UI REQUEST FOR ${date} ===`);
+        
+        const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
+            headers,
+            timeout: 30000,
+            validateStatus: () => true
+        });
+        
+        if (response.data?.request_id) {
+            // Quick polling for historical data
+            for (let i = 1; i <= 10; i++) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                const statusUrl = `https://api.nexmo.com/v2/reports/${response.data.request_id}`;
+                const statusResponse = await axios.get(statusUrl, { headers });
+                
+                if (statusResponse.data?.request_status === 'SUCCESS') {
+                    const downloadUrl = statusResponse.data?._links?.download_report?.href;
+                    
+                    if (downloadUrl) {
+                        const dlResponse = await axios.get(downloadUrl, { headers });
+                        
+                        if (typeof dlResponse.data === 'string') {
+                            // Parse CSV (same logic as above)
+                            const parseCSVLine = (line) => {
+                                const result = [];
+                                let current = '';
+                                let inQuotes = false;
+                                
+                                for (let i = 0; i < line.length; i++) {
+                                    const char = line[i];
+                                    if (char === '"') {
+                                        inQuotes = !inQuotes;
+                                    } else if (char === ',' && !inQuotes) {
+                                        result.push(current.trim());
+                                        current = '';
+                                    } else {
+                                        current += char;
+                                    }
+                                }
+                                result.push(current.trim());
+                                return result;
+                            };
+                            
+                            const lines = dlResponse.data.split('\n').filter(line => line.trim());
+                            const headers = parseCSVLine(lines[0]);
+                            const records = [];
+                            
+                            for (let j = 1; j < lines.length; j++) {
+                                const values = parseCSVLine(lines[j]);
+                                const record = {};
+                                headers.forEach((header, index) => {
+                                    record[header] = values[index] || '';
+                                });
+                                records.push(record);
+                            }
+                            
+                            const data = processRecords(records);
+                            
+                            return res.json({
+                                success: true,
+                                data: data,
+                                date: date,
+                                recordCount: records.length
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        res.json({
+            success: false,
+            message: `No data for ${date}`,
+            data: processRecords([]),
+            date: date
+        });
+        
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            data: processRecords([])
+        });
+    }
 });
 
 // =================== ERROR HANDLERS ===================
