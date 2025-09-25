@@ -1,5 +1,5 @@
-// server.js - Complete Chatti Platform Backend
-// Queries multiple Vonage sub-accounts for SMS data
+// CRITICAL SAFETY MEASURES FOR VONAGE API USAGE
+// This version includes multiple safeguards to prevent excessive API calls
 
 const express = require('express');
 const cors = require('cors');
@@ -9,9 +9,7 @@ const dotenv = require('dotenv');
 const jwt = require('jsonwebtoken');
 const AdmZip = require('adm-zip');
 
-// Load environment variables
 dotenv.config();
-
 const app = express();
 
 // Middleware
@@ -19,18 +17,31 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Configuration from environment variables
+// Configuration
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-production';
 const VONAGE_API_KEY = process.env.VONAGE_API_KEY || '4c42609f';
 const VONAGE_API_SECRET = process.env.VONAGE_API_SECRET || '';
 const CURRENCY_RATES = { EUR_TO_AUD: 1.64 };
 
-// Log startup
-console.log('Starting Chatti Platform server...');
-console.log('VONAGE_API_KEY:', VONAGE_API_KEY);
-console.log('VONAGE_API_SECRET is', VONAGE_API_SECRET ? 'SET' : 'NOT SET - REQUIRED!');
+// CRITICAL: Add rate limiting and request tracking
+const requestTracker = {
+    lastFullQuery: null,
+    requestCount: 0,
+    dailyRequestCount: 0,
+    lastResetDate: new Date().toDateString()
+};
 
-// Simple user store for authentication
+// SAFETY LIMITS
+const SAFETY_CONFIG = {
+    MAX_ACCOUNTS_PER_QUERY: 10,  // Never query more than 10 at once
+    MIN_HOURS_BETWEEN_FULL_QUERIES: 24,  // Only allow full query once per day
+    MAX_DAILY_API_CALLS: 1000,  // Hard limit on daily API calls
+    MAX_POLLING_ATTEMPTS: 3,  // Reduce polling attempts
+    POLLING_DELAY_MS: 5000,  // Increase delay between polls
+    CACHE_DURATION_HOURS: 24  // Cache for 24 hours, not 1
+};
+
+// Simple auth store
 const users = [{
     id: 1,
     email: 'admin@chatti.com',
@@ -39,11 +50,41 @@ const users = [{
     name: 'Admin User'
 }];
 
-// Cache store
-let dataStore = { smsCache: {} };
+// Enhanced cache with longer duration
+let dataCache = {
+    sms: {},
+    subaccountsList: null,
+    subaccountsListTimestamp: null
+};
 
-// =================== HELPER FUNCTIONS ===================
+// Reset daily counter
+function resetDailyCounterIfNeeded() {
+    const today = new Date().toDateString();
+    if (requestTracker.lastResetDate !== today) {
+        requestTracker.dailyRequestCount = 0;
+        requestTracker.lastResetDate = today;
+        console.log('Daily request counter reset');
+    }
+}
 
+// Check if we can make more API calls
+function canMakeApiCall(required = 1) {
+    resetDailyCounterIfNeeded();
+    if (requestTracker.dailyRequestCount + required > SAFETY_CONFIG.MAX_DAILY_API_CALLS) {
+        console.error(`SAFETY LIMIT: Would exceed daily limit of ${SAFETY_CONFIG.MAX_DAILY_API_CALLS} API calls`);
+        return false;
+    }
+    return true;
+}
+
+// Track API calls
+function trackApiCall(count = 1) {
+    requestTracker.requestCount += count;
+    requestTracker.dailyRequestCount += count;
+    console.log(`API calls made: ${requestTracker.dailyRequestCount}/${SAFETY_CONFIG.MAX_DAILY_API_CALLS} today`);
+}
+
+// Helper functions
 function parseCSVLine(line) {
     const result = [];
     let current = '';
@@ -70,7 +111,6 @@ async function extractAndParseCSV(data, isBuffer = false) {
     if (isBuffer) {
         const buffer = Buffer.from(data);
         
-        // Check if it's a ZIP file
         if (buffer[0] === 0x50 && buffer[1] === 0x4B) {
             console.log('Extracting CSV from ZIP...');
             const zip = new AdmZip(buffer);
@@ -91,7 +131,6 @@ async function extractAndParseCSV(data, isBuffer = false) {
     
     if (!csvData) return [];
     
-    // Parse CSV
     const lines = csvData.split('\n').filter(line => line.trim());
     const headers = parseCSVLine(lines[0]);
     const records = [];
@@ -105,7 +144,6 @@ async function extractAndParseCSV(data, isBuffer = false) {
         records.push(record);
     }
     
-    console.log(`Parsed ${records.length} records`);
     return records;
 }
 
@@ -143,8 +181,7 @@ function processRecords(records) {
     return { aggregated: result };
 }
 
-// =================== AUTH MIDDLEWARE ===================
-
+// Auth middleware
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -162,19 +199,23 @@ function authenticateToken(req, res, next) {
     });
 }
 
-// =================== ROUTES ===================
-
-// Serve index.html
+// Routes
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Health check
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'OK', message: 'Server is running' });
+    res.json({ 
+        status: 'OK', 
+        message: 'Server is running',
+        safety: {
+            dailyRequestsMade: requestTracker.dailyRequestCount,
+            dailyLimit: SAFETY_CONFIG.MAX_DAILY_API_CALLS,
+            lastFullQuery: requestTracker.lastFullQuery
+        }
+    });
 });
 
-// Login
 app.post('/api/login', (req, res) => {
     const { email, passHash } = req.body;
     const user = users.find(u => u.email === email && u.passwordHash === passHash);
@@ -191,79 +232,52 @@ app.post('/api/login', (req, res) => {
 app.get('/api/vonage/test', authenticateToken, async (req, res) => {
     try {
         if (!VONAGE_API_SECRET) {
-            return res.json({ 
-                success: false, 
-                error: 'VONAGE_API_SECRET not set in environment' 
-            });
+            return res.json({ success: false, error: 'VONAGE_API_SECRET not set' });
+        }
+        
+        if (!canMakeApiCall(1)) {
+            return res.json({ success: false, error: 'Daily API limit reached' });
         }
         
         const auth = Buffer.from(`${VONAGE_API_KEY}:${VONAGE_API_SECRET}`).toString('base64');
+        
+        trackApiCall(1);
         const response = await axios.get('https://rest.nexmo.com/account/get-balance', {
-            headers: { 'Authorization': `Basic ${auth}` }
+            headers: { 'Authorization': `Basic ${auth}` },
+            timeout: 10000
         });
         
         res.json({ 
             success: true, 
             balance: response.data.value,
-            currency: response.data.currency 
+            currency: response.data.currency,
+            apiCallsToday: requestTracker.dailyRequestCount
         });
     } catch (error) {
-        res.json({ 
-            success: false, 
-            error: error.message 
-        });
+        res.json({ success: false, error: error.message });
     }
 });
 
-// Get list of all sub-accounts
-app.get('/api/vonage/subaccounts/list', authenticateToken, async (req, res) => {
-    try {
-        if (!VONAGE_API_SECRET) {
-            return res.json({ success: false, error: 'API Secret not configured', accounts: [] });
-        }
-        
-        const auth = Buffer.from(`${VONAGE_API_KEY}:${VONAGE_API_SECRET}`).toString('base64');
-        const url = `https://api.nexmo.com/accounts/${VONAGE_API_KEY}/subaccounts`;
-        
-        console.log('Fetching sub-accounts list...');
-        
-        const response = await axios.get(url, {
-            headers: { 'Authorization': `Basic ${auth}` },
-            timeout: 10000
-        });
-        
-        let accounts = [];
-        if (response.data?._embedded?.subaccounts) {
-            accounts = response.data._embedded.subaccounts;
-        }
-        
-        console.log(`Found ${accounts.length} sub-accounts`);
-        
-        res.json({
-            success: true,
-            count: accounts.length,
-            accounts: accounts.map(a => ({
-                api_key: a.api_key,
-                name: a.name || 'Unnamed',
-                balance: a.balance,
-                created_at: a.created_at
-            }))
-        });
-        
-    } catch (error) {
-        console.error('Error listing sub-accounts:', error.message);
-        res.json({ success: false, error: error.message, accounts: [] });
-    }
-});
-
-// Query single sub-account (for testing)
+// SAFE: Query single sub-account only
 app.get('/api/vonage/usage/sms/single-account', authenticateToken, async (req, res) => {
     try {
-        if (!VONAGE_API_SECRET) {
-            return res.json({
-                success: false,
-                error: 'VONAGE_API_SECRET not configured',
-                data: { total: 0, totalCost: 0, totalCostAUD: 0, byCountry: {} }
+        const accountId = req.query.account_id || 'f3fa74ea';
+        const today = new Date().toISOString().slice(0, 10);
+        
+        // Check cache first
+        const cacheKey = `single_${accountId}_${today}`;
+        if (dataCache.sms[cacheKey] && 
+            (Date.now() - dataCache.sms[cacheKey].timestamp) < SAFETY_CONFIG.CACHE_DURATION_HOURS * 60 * 60 * 1000) {
+            console.log('Returning cached data for', accountId);
+            return res.json(dataCache.sms[cacheKey].data);
+        }
+        
+        if (!canMakeApiCall(5)) {  // Estimate 5 calls max for single account
+            return res.json({ 
+                success: false, 
+                error: 'Daily API limit reached',
+                cached: false,
+                apiCallsToday: requestTracker.dailyRequestCount
             });
         }
         
@@ -272,9 +286,6 @@ app.get('/api/vonage/usage/sms/single-account', authenticateToken, async (req, r
             'Authorization': `Basic ${auth}`,
             'Content-Type': 'application/json'
         };
-        
-        const today = new Date().toISOString().slice(0, 10);
-        const accountId = req.query.account_id || 'f3fa74ea';
         
         const body = {
             "account_id": accountId,
@@ -286,6 +297,7 @@ app.get('/api/vonage/usage/sms/single-account', authenticateToken, async (req, r
         
         console.log(`Querying single account ${accountId}...`);
         
+        trackApiCall(1);
         const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
             headers,
             timeout: 30000
@@ -299,41 +311,56 @@ app.get('/api/vonage/usage/sms/single-account', authenticateToken, async (req, r
             });
         }
         
-        // Poll for results
-        for (let i = 1; i <= 20; i++) {
-            await new Promise(resolve => setTimeout(resolve, 3000));
+        // SAFE: Limited polling with timeout
+        let reportData = null;
+        for (let i = 1; i <= SAFETY_CONFIG.MAX_POLLING_ATTEMPTS; i++) {
+            await new Promise(resolve => setTimeout(resolve, SAFETY_CONFIG.POLLING_DELAY_MS));
             
+            trackApiCall(1);
             const statusUrl = `https://api.nexmo.com/v2/reports/${response.data.request_id}`;
-            const statusResponse = await axios.get(statusUrl, { headers });
+            const statusResponse = await axios.get(statusUrl, { headers, timeout: 10000 });
             
             if (statusResponse.data?.request_status === 'SUCCESS') {
                 const downloadUrl = statusResponse.data?._links?.download_report?.href;
-                
                 if (downloadUrl) {
+                    trackApiCall(1);
                     const dlResponse = await axios.get(downloadUrl, {
                         headers,
-                        responseType: 'arraybuffer'
+                        responseType: 'arraybuffer',
+                        timeout: 30000
                     });
                     
                     const records = await extractAndParseCSV(dlResponse.data, true);
-                    const reportData = processRecords(records);
-                    
-                    return res.json({
-                        success: true,
-                        accountId: accountId,
-                        data: reportData.aggregated,
-                        recordCount: records.length,
-                        currencyRate: CURRENCY_RATES.EUR_TO_AUD
-                    });
+                    reportData = processRecords(records);
+                    break;
                 }
             }
         }
         
-        res.json({
-            success: false,
-            message: 'Timeout',
-            data: { total: 0, totalCost: 0, totalCostAUD: 0, byCountry: {} }
-        });
+        if (!reportData) {
+            return res.json({
+                success: false,
+                message: 'Report timeout',
+                data: { total: 0, totalCost: 0, totalCostAUD: 0, byCountry: {} }
+            });
+        }
+        
+        const result = {
+            success: true,
+            accountId: accountId,
+            data: reportData.aggregated,
+            recordCount: reportData.aggregated.total,
+            currencyRate: CURRENCY_RATES.EUR_TO_AUD,
+            apiCallsToday: requestTracker.dailyRequestCount
+        };
+        
+        // Cache result
+        dataCache.sms[cacheKey] = {
+            data: result,
+            timestamp: Date.now()
+        };
+        
+        res.json(result);
         
     } catch (error) {
         console.error('Error:', error.message);
@@ -345,51 +372,78 @@ app.get('/api/vonage/usage/sms/single-account', authenticateToken, async (req, r
     }
 });
 
-// Query multiple sub-accounts
+// DANGER ZONE: Multiple accounts - HEAVILY RESTRICTED
 app.get('/api/vonage/usage/sms/all-accounts', authenticateToken, async (req, res) => {
-    try {
-        if (!VONAGE_API_SECRET) {
-            return res.json({ success: false, error: 'API Secret not configured' });
+    // SAFETY: Check if enough time has passed
+    if (requestTracker.lastFullQuery) {
+        const hoursSinceLastQuery = (Date.now() - requestTracker.lastFullQuery) / (1000 * 60 * 60);
+        if (hoursSinceLastQuery < SAFETY_CONFIG.MIN_HOURS_BETWEEN_FULL_QUERIES) {
+            const hoursRemaining = (SAFETY_CONFIG.MIN_HOURS_BETWEEN_FULL_QUERIES - hoursSinceLastQuery).toFixed(1);
+            return res.json({ 
+                success: false, 
+                error: `Full query only allowed once every ${SAFETY_CONFIG.MIN_HOURS_BETWEEN_FULL_QUERIES} hours. Wait ${hoursRemaining} more hours.`,
+                lastQuery: requestTracker.lastFullQuery,
+                apiCallsToday: requestTracker.dailyRequestCount
+            });
         }
-        
+    }
+    
+    try {
         const auth = Buffer.from(`${VONAGE_API_KEY}:${VONAGE_API_SECRET}`).toString('base64');
-        const headers = {
-            'Authorization': `Basic ${auth}`,
-            'Content-Type': 'application/json'
-        };
-        
         const today = new Date().toISOString().slice(0, 10);
         
-        // Check cache (1 hour)
+        // Check cache
         const cacheKey = `all_accounts_${today}`;
-        if (dataStore.smsCache[cacheKey] && 
-            (Date.now() - dataStore.smsCache[cacheKey].timestamp) < 60 * 60 * 1000) {
-            console.log('Returning cached data');
-            return res.json(dataStore.smsCache[cacheKey].data);
+        if (dataCache.sms[cacheKey] && 
+            (Date.now() - dataCache.sms[cacheKey].timestamp) < SAFETY_CONFIG.CACHE_DURATION_HOURS * 60 * 60 * 1000) {
+            console.log('Returning cached all-accounts data');
+            return res.json(dataCache.sms[cacheKey].data);
         }
         
-        // Get list of sub-accounts
-        const accountsUrl = `https://api.nexmo.com/accounts/${VONAGE_API_KEY}/subaccounts`;
-        console.log('Getting sub-accounts list...');
+        // SAFETY: Hard limit on number of accounts
+        const requestedLimit = parseInt(req.query.limit || '10');
+        const limit = Math.min(requestedLimit, SAFETY_CONFIG.MAX_ACCOUNTS_PER_QUERY);
         
-        const accountsResponse = await axios.get(accountsUrl, {
-            headers: { 'Authorization': `Basic ${auth}` },
-            timeout: 10000
-        });
+        if (requestedLimit > SAFETY_CONFIG.MAX_ACCOUNTS_PER_QUERY) {
+            console.warn(`Requested ${requestedLimit} accounts, limiting to ${SAFETY_CONFIG.MAX_ACCOUNTS_PER_QUERY}`);
+        }
         
+        // Estimate API calls needed
+        const estimatedCalls = limit * 5;  // Rough estimate
+        if (!canMakeApiCall(estimatedCalls)) {
+            return res.json({ 
+                success: false, 
+                error: `Would exceed daily limit. Estimated ${estimatedCalls} calls needed.`,
+                apiCallsToday: requestTracker.dailyRequestCount,
+                dailyLimit: SAFETY_CONFIG.MAX_DAILY_API_CALLS
+            });
+        }
+        
+        // Get cached sub-accounts list if available
         let subAccounts = [];
-        if (accountsResponse.data?._embedded?.subaccounts) {
-            subAccounts = accountsResponse.data._embedded.subaccounts;
+        if (dataCache.subaccountsList && 
+            (Date.now() - dataCache.subaccountsListTimestamp) < 24 * 60 * 60 * 1000) {
+            subAccounts = dataCache.subaccountsList;
+            console.log('Using cached subaccounts list');
+        } else {
+            trackApiCall(1);
+            const accountsUrl = `https://api.nexmo.com/accounts/${VONAGE_API_KEY}/subaccounts`;
+            const accountsResponse = await axios.get(accountsUrl, {
+                headers: { 'Authorization': `Basic ${auth}` },
+                timeout: 10000
+            });
+            
+            if (accountsResponse.data?._embedded?.subaccounts) {
+                subAccounts = accountsResponse.data._embedded.subaccounts;
+                dataCache.subaccountsList = subAccounts;
+                dataCache.subaccountsListTimestamp = Date.now();
+            }
         }
         
-        console.log(`Found ${subAccounts.length} sub-accounts`);
+        console.log(`Found ${subAccounts.length} sub-accounts, will query ${limit}`);
         
-        // Limit for testing - REMOVE THIS to query all accounts
-        const limit = parseInt(req.query.limit || '10');
+        // Query limited number of accounts
         const accountsToQuery = subAccounts.slice(0, limit);
-        console.log(`Querying ${accountsToQuery.length} accounts (limit: ${limit})`);
-        
-        // Combined results
         const allAccountsData = {
             total: 0,
             outbound: 0,
@@ -402,10 +456,39 @@ app.get('/api/vonage/usage/sms/all-accounts', authenticateToken, async (req, res
         let successfulQueries = 0;
         let failedQueries = [];
         
-        // Query each sub-account
         for (const account of accountsToQuery) {
             try {
                 console.log(`Querying ${account.api_key}...`);
+                
+                // Check individual cache first
+                const accountCacheKey = `single_${account.api_key}_${today}`;
+                if (dataCache.sms[accountCacheKey] && 
+                    (Date.now() - dataCache.sms[accountCacheKey].timestamp) < SAFETY_CONFIG.CACHE_DURATION_HOURS * 60 * 60 * 1000) {
+                    console.log(`Using cached data for ${account.api_key}`);
+                    const cachedData = dataCache.sms[accountCacheKey].data;
+                    if (cachedData.data.total > 0) {
+                        successfulQueries++;
+                        allAccountsData.total += cachedData.data.total;
+                        allAccountsData.outbound += cachedData.data.outbound;
+                        allAccountsData.totalCost += cachedData.data.totalCost;
+                        allAccountsData.totalCostAUD += cachedData.data.totalCostAUD;
+                        
+                        perAccountDetail[account.api_key] = {
+                            accountId: account.api_key,
+                            name: account.name || 'Unnamed',
+                            count: cachedData.data.total,
+                            cost: cachedData.data.totalCost,
+                            costAUD: cachedData.data.totalCostAUD,
+                            countries: Object.keys(cachedData.data.byCountry)
+                        };
+                    }
+                    continue;
+                }
+                
+                const headers = {
+                    'Authorization': `Basic ${auth}`,
+                    'Content-Type': 'application/json'
+                };
                 
                 const body = {
                     "account_id": account.api_key,
@@ -415,6 +498,7 @@ app.get('/api/vonage/usage/sms/all-accounts', authenticateToken, async (req, res
                     "date_end": `${today}T23:59:59+0000`
                 };
                 
+                trackApiCall(1);
                 const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
                     headers,
                     timeout: 30000
@@ -425,26 +509,38 @@ app.get('/api/vonage/usage/sms/all-accounts', authenticateToken, async (req, res
                     continue;
                 }
                 
-                // Poll for results
+                // Limited polling
                 let accountData = null;
-                for (let i = 1; i <= 10; i++) {
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+                for (let i = 1; i <= SAFETY_CONFIG.MAX_POLLING_ATTEMPTS; i++) {
+                    await new Promise(resolve => setTimeout(resolve, SAFETY_CONFIG.POLLING_DELAY_MS));
                     
+                    trackApiCall(1);
                     const statusUrl = `https://api.nexmo.com/v2/reports/${response.data.request_id}`;
-                    const statusResponse = await axios.get(statusUrl, { headers });
+                    const statusResponse = await axios.get(statusUrl, { headers, timeout: 10000 });
                     
                     if (statusResponse.data?.request_status === 'SUCCESS') {
                         const downloadUrl = statusResponse.data?._links?.download_report?.href;
-                        
                         if (downloadUrl) {
+                            trackApiCall(1);
                             const dlResponse = await axios.get(downloadUrl, {
                                 headers,
-                                responseType: 'arraybuffer'
+                                responseType: 'arraybuffer',
+                                timeout: 30000
                             });
                             
                             const records = await extractAndParseCSV(dlResponse.data, true);
                             accountData = processRecords(records);
                             console.log(`${account.api_key}: ${records.length} SMS`);
+                            
+                            // Cache individual account data
+                            dataCache.sms[accountCacheKey] = {
+                                data: {
+                                    success: true,
+                                    accountId: account.api_key,
+                                    data: accountData.aggregated
+                                },
+                                timestamp: Date.now()
+                            };
                             break;
                         }
                     }
@@ -452,14 +548,11 @@ app.get('/api/vonage/usage/sms/all-accounts', authenticateToken, async (req, res
                 
                 if (accountData && accountData.aggregated.total > 0) {
                     successfulQueries++;
-                    
-                    // Add to totals
                     allAccountsData.total += accountData.aggregated.total;
                     allAccountsData.outbound += accountData.aggregated.outbound;
                     allAccountsData.totalCost += accountData.aggregated.totalCost;
                     allAccountsData.totalCostAUD += accountData.aggregated.totalCostAUD;
                     
-                    // Per-account detail
                     perAccountDetail[account.api_key] = {
                         accountId: account.api_key,
                         name: account.name || 'Unnamed',
@@ -469,7 +562,6 @@ app.get('/api/vonage/usage/sms/all-accounts', authenticateToken, async (req, res
                         countries: Object.keys(accountData.aggregated.byCountry)
                     };
                     
-                    // Merge country data
                     for (const [country, data] of Object.entries(accountData.aggregated.byCountry)) {
                         if (!allAccountsData.byCountry[country]) {
                             allAccountsData.byCountry[country] = {
@@ -484,8 +576,8 @@ app.get('/api/vonage/usage/sms/all-accounts', authenticateToken, async (req, res
                     }
                 }
                 
-                // Small delay to avoid rate limiting
-                await new Promise(resolve => setTimeout(resolve, 500));
+                // SAFETY: Delay between accounts
+                await new Promise(resolve => setTimeout(resolve, 1000));
                 
             } catch (error) {
                 console.error(`Failed ${account.api_key}:`, error.message);
@@ -494,6 +586,7 @@ app.get('/api/vonage/usage/sms/all-accounts', authenticateToken, async (req, res
         }
         
         console.log(`Complete: ${successfulQueries} successful, ${failedQueries.length} failed`);
+        requestTracker.lastFullQuery = Date.now();
         
         const result = {
             success: true,
@@ -505,11 +598,13 @@ app.get('/api/vonage/usage/sms/all-accounts', authenticateToken, async (req, res
             totalAccountsAvailable: subAccounts.length,
             failedAccounts: failedQueries,
             date: today,
-            currencyRate: CURRENCY_RATES.EUR_TO_AUD
+            currencyRate: CURRENCY_RATES.EUR_TO_AUD,
+            apiCallsToday: requestTracker.dailyRequestCount,
+            warning: limit < subAccounts.length ? `LIMITED TO ${limit} ACCOUNTS FOR SAFETY` : null
         };
         
         // Cache result
-        dataStore.smsCache[cacheKey] = {
+        dataCache.sms[cacheKey] = {
             data: result,
             timestamp: Date.now()
         };
@@ -522,18 +617,91 @@ app.get('/api/vonage/usage/sms/all-accounts', authenticateToken, async (req, res
     }
 });
 
-// Error handler
+// Get list of sub-accounts (cached)
+app.get('/api/vonage/subaccounts/list', authenticateToken, async (req, res) => {
+    try {
+        // Use cached list if available
+        if (dataCache.subaccountsList && 
+            (Date.now() - dataCache.subaccountsListTimestamp) < 24 * 60 * 60 * 1000) {
+            return res.json({
+                success: true,
+                count: dataCache.subaccountsList.length,
+                accounts: dataCache.subaccountsList.map(a => ({
+                    api_key: a.api_key,
+                    name: a.name || 'Unnamed',
+                    balance: a.balance,
+                    created_at: a.created_at
+                })),
+                cached: true
+            });
+        }
+        
+        if (!canMakeApiCall(1)) {
+            return res.json({ success: false, error: 'Daily API limit reached', accounts: [] });
+        }
+        
+        const auth = Buffer.from(`${VONAGE_API_KEY}:${VONAGE_API_SECRET}`).toString('base64');
+        const url = `https://api.nexmo.com/accounts/${VONAGE_API_KEY}/subaccounts`;
+        
+        trackApiCall(1);
+        const response = await axios.get(url, {
+            headers: { 'Authorization': `Basic ${auth}` },
+            timeout: 10000
+        });
+        
+        let accounts = [];
+        if (response.data?._embedded?.subaccounts) {
+            accounts = response.data._embedded.subaccounts;
+            dataCache.subaccountsList = accounts;
+            dataCache.subaccountsListTimestamp = Date.now();
+        }
+        
+        res.json({
+            success: true,
+            count: accounts.length,
+            accounts: accounts.map(a => ({
+                api_key: a.api_key,
+                name: a.name || 'Unnamed',
+                balance: a.balance,
+                created_at: a.created_at
+            })),
+            cached: false
+        });
+        
+    } catch (error) {
+        console.error('Error listing sub-accounts:', error.message);
+        res.json({ success: false, error: error.message, accounts: [] });
+    }
+});
+
+// API usage stats endpoint
+app.get('/api/stats', authenticateToken, (req, res) => {
+    resetDailyCounterIfNeeded();
+    res.json({
+        daily: {
+            used: requestTracker.dailyRequestCount,
+            limit: SAFETY_CONFIG.MAX_DAILY_API_CALLS,
+            remaining: SAFETY_CONFIG.MAX_DAILY_API_CALLS - requestTracker.dailyRequestCount
+        },
+        lastFullQuery: requestTracker.lastFullQuery,
+        totalRequestsMade: requestTracker.requestCount,
+        safetyLimits: SAFETY_CONFIG
+    });
+});
+
 app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });
 });
 
-// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`\n========================================`);
-    console.log(`Chatti Platform Server`);
+    console.log(`SAFE Chatti Platform Server`);
     console.log(`Port: ${PORT}`);
-    console.log(`VONAGE_API_KEY: ${VONAGE_API_KEY}`);
-    console.log(`VONAGE_API_SECRET: ${VONAGE_API_SECRET ? 'SET' : 'NOT SET - REQUIRED!'}`);
+    console.log(`Safety Limits:`);
+    console.log(`- Max ${SAFETY_CONFIG.MAX_ACCOUNTS_PER_QUERY} accounts per query`);
+    console.log(`- Max ${SAFETY_CONFIG.MAX_DAILY_API_CALLS} API calls per day`);
+    console.log(`- ${SAFETY_CONFIG.CACHE_DURATION_HOURS} hour cache`);
+    console.log(`- Full query only once per ${SAFETY_CONFIG.MIN_HOURS_BETWEEN_FULL_QUERIES} hours`);
     console.log(`========================================\n`);
 });
