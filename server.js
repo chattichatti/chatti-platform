@@ -198,7 +198,7 @@ async function fetchSMSReports(dateStart, dateEnd) {
             "product": "SMS",
             "include_subaccounts": "true",  // String, not boolean
             "direction": "outbound",
-            "date_start": `${dateStart}T00:00:00+0000`,  // Use +0000 format like Vonage
+            "date_start": `${dateStart}T00:00:00+0000`,
             "date_end": `${dateEnd}T23:59:59+0000`
         };
         
@@ -238,12 +238,13 @@ async function fetchSMSReports(dateStart, dateEnd) {
                 return response.data.records;
             }
             
-            // Check if we got an async request ID
+            // Check if we got an async request ID - THIS IS WHERE THE DATA IS!
             if (response.data?.request_id) {
                 console.log(`⏳ Got async request_id: ${response.data.request_id}`);
-                console.log('Would need to poll /v2/reports/' + response.data.request_id + ' for results');
-                // For now, return empty - you'd need to implement polling
-                return [];
+                console.log('Polling for async results...');
+                
+                // Poll for the async results
+                return await pollForAsyncResults(response.data.request_id, headers);
             }
             
             // Check if we got an empty result
@@ -275,6 +276,117 @@ async function fetchSMSReports(dateStart, dateEnd) {
             console.error('Error response status:', error.response.status);
             console.error('Error response data:', error.response.data);
         }
+        return [];
+    }
+}
+
+// New function to poll for async results
+async function pollForAsyncResults(requestId, headers) {
+    const maxAttempts = 30;  // Poll for up to 5 minutes
+    const pollInterval = 10000; // Check every 10 seconds
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            console.log(`Poll attempt ${attempt}/${maxAttempts} for request_id: ${requestId}`);
+            
+            const statusUrl = `https://api.nexmo.com/v2/reports/${requestId}`;
+            const response = await axios.get(statusUrl, {
+                headers,
+                timeout: 10000,
+                validateStatus: (status) => status < 500
+            });
+            
+            console.log(`Poll response status: ${response.status}`);
+            
+            if (response.status === 200) {
+                // Check if the report is ready
+                if (response.data?.status === 'completed' || response.data?.status === 'COMPLETED') {
+                    console.log('✅ Report completed!');
+                    
+                    // Check if we have a download URL
+                    if (response.data?.download_url) {
+                        console.log('📥 Downloading report from:', response.data.download_url);
+                        return await downloadReport(response.data.download_url, headers);
+                    }
+                    
+                    // Check if records are directly in the response
+                    if (response.data?.records && Array.isArray(response.data.records)) {
+                        console.log(`✅ Got ${response.data.records.length} records from async report`);
+                        return response.data.records;
+                    }
+                    
+                    console.log('⚠️ Report completed but no records or download_url found');
+                    console.log('Response data:', JSON.stringify(response.data, null, 2));
+                    return [];
+                    
+                } else if (response.data?.status === 'failed' || response.data?.status === 'FAILED') {
+                    console.error('❌ Report generation failed');
+                    return [];
+                    
+                } else {
+                    console.log(`⏳ Report status: ${response.data?.status || 'processing'}`);
+                    if (response.data?.records_count) {
+                        console.log(`   Records being processed: ${response.data.records_count}`);
+                    }
+                }
+            } else if (response.status === 404) {
+                console.error('❌ Request ID not found - may have expired');
+                return [];
+            }
+            
+            // Wait before next poll (except on last attempt)
+            if (attempt < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, pollInterval));
+            }
+            
+        } catch (error) {
+            console.error(`Poll attempt ${attempt} failed:`, error.message);
+            // Continue polling unless it's the last attempt
+            if (attempt === maxAttempts) {
+                throw error;
+            }
+        }
+    }
+    
+    console.error('❌ Polling timeout - report took too long to generate');
+    return [];
+}
+
+// New function to download report from URL
+async function downloadReport(downloadUrl, headers) {
+    try {
+        console.log('📥 Downloading report data...');
+        
+        const response = await axios.get(downloadUrl, {
+            headers,
+            timeout: 60000,  // 1 minute timeout for large downloads
+            validateStatus: (status) => status < 500
+        });
+        
+        if (response.status === 200) {
+            // Check if it's JSON data
+            if (response.data?.records && Array.isArray(response.data.records)) {
+                console.log(`✅ Downloaded ${response.data.records.length} records`);
+                return response.data.records;
+            }
+            
+            // Check if it's CSV data
+            if (typeof response.data === 'string' && response.data.includes(',')) {
+                console.log('📄 Got CSV data, parsing...');
+                // You'd need to parse CSV here - for now just log
+                console.log('CSV parsing not implemented - data format:', response.data.substring(0, 200));
+                return [];
+            }
+            
+            console.log('⚠️ Unknown data format in download');
+            return [];
+        }
+        
+        console.error('❌ Failed to download report:', response.status);
+        return [];
+        
+    } catch (error) {
+        console.error('❌ Download error:', error.message);
         return [];
     }
 }
@@ -365,34 +477,24 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
 
 // =================== SMS USAGE ENDPOINTS ===================
 
-// Main SMS usage endpoint - uses include_subaccounts
+// Main SMS usage endpoint - simplified for TODAY ONLY
 app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
     try {
-        // Get current month or use provided month
-        let { month } = req.query;
+        // Get today's date (September 25, 2025)
+        const today = new Date().toISOString().slice(0, 10); // 2025-09-25
         
-        // Default to current month if not specified (September 2025)
-        if (!month) {
-            month = '2025-09';  // Current month is September 2025
-        }
-        
-        console.log(`\n=== SMS USAGE REQUEST FOR ${month} ===`);
+        console.log(`\n=== SMS USAGE REQUEST FOR TODAY: ${today} ===`);
         
         // Check cache first
-        const cacheKey = `sms_${month}`;
+        const cacheKey = `sms_${today}`;
         if (dataStore.smsCache[cacheKey] && 
             (Date.now() - dataStore.smsCache[cacheKey].timestamp) < 5 * 60 * 1000) {
-            console.log('Returning cached data for', month);
+            console.log('Returning cached data for today');
             return res.json(dataStore.smsCache[cacheKey].data);
         }
         
-        const [year, monthNum] = month.split('-').map(Number);
-        const dateStart = `${year}-${String(monthNum).padStart(2, '0')}-01`;
-        const lastDay = new Date(year, monthNum, 0).getDate();
-        const dateEnd = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-        
-        // Fetch data using include_subaccounts
-        const records = await fetchSMSReports(dateStart, dateEnd);
+        // Fetch data for today only
+        const records = await fetchSMSReports(today, today);
         
         console.log(`Total records retrieved: ${records.length}`);
         
@@ -402,10 +504,10 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
         const result = {
             success: true,
             data: aggregatedData,
-            month: month,
-            dateRange: `${dateStart} to ${dateEnd}`,
+            date: today,
             recordCount: aggregatedData.total,
-            method: 'include_subaccounts'
+            method: 'include_subaccounts',
+            message: `SMS usage for today (${today})`
         };
         
         // Cache the result if we got data
@@ -428,32 +530,69 @@ app.get('/api/vonage/usage/sms', authenticateToken, async (req, res) => {
     }
 });
 
-// Current month usage
-app.get('/api/vonage/usage/current', authenticateToken, (req, res) => {
-    const now = new Date();
-    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    res.redirect(`/api/vonage/usage/sms?month=${month}`);
+// Get usage for a specific date
+app.get('/api/vonage/usage/sms/:date', authenticateToken, async (req, res) => {
+    try {
+        const { date } = req.params;
+        
+        console.log(`\n=== SMS USAGE REQUEST FOR DATE: ${date} ===`);
+        
+        // Validate date format
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid date format. Use YYYY-MM-DD'
+            });
+        }
+        
+        // Fetch data for specific date
+        const records = await fetchSMSReports(date, date);
+        
+        console.log(`Total records retrieved: ${records.length}`);
+        
+        // Process and return the records
+        const aggregatedData = processRecords(records);
+        
+        res.json({
+            success: true,
+            data: aggregatedData,
+            date: date,
+            recordCount: aggregatedData.total,
+            method: 'include_subaccounts'
+        });
+        
+    } catch (error) {
+        console.error('SMS usage endpoint error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            data: processRecords([])
+        });
+    }
 });
 
-// Dashboard summary
+// Current month usage (redirect to today for simplicity)
+app.get('/api/vonage/usage/current', authenticateToken, (req, res) => {
+    res.redirect('/api/vonage/usage/sms');
+});
+
+// Dashboard summary - simplified for today
 app.get('/api/vonage/dashboard/summary', authenticateToken, async (req, res) => {
     try {
-        const now = new Date();
-        const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        const dateStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-        const dateEnd = now.toISOString().slice(0, 10);
+        const today = new Date().toISOString().slice(0, 10);
         
-        // Fetch data using include_subaccounts
-        const records = await fetchSMSReports(dateStart, dateEnd);
+        // Fetch data for today
+        const records = await fetchSMSReports(today, today);
         const data = processRecords(records);
         
         const summary = {
             success: true,
-            month: currentMonth,
+            date: today,
             totalSMS: data.total,
             totalCost: data.totalCost,
             activeCustomers: Object.keys(data.bySubAccount).length,
-            lastUpdated: new Date().toISOString()
+            lastUpdated: new Date().toISOString(),
+            message: `Today's SMS usage (${today})`
         };
         
         res.json(summary);
@@ -468,37 +607,20 @@ app.get('/api/vonage/dashboard/summary', authenticateToken, async (req, res) => 
     }
 });
 
-// Test endpoint to check what month we're querying
-app.get('/api/test/current-date', authenticateToken, (req, res) => {
-    const now = new Date();
+// Test endpoint to check today's date and test the API
+app.get('/api/test/today', authenticateToken, async (req, res) => {
+    const today = new Date().toISOString().slice(0, 10);
+    
     res.json({
-        serverTime: now.toISOString(),
-        currentMonth: '2025-09',  // September 2025
-        actualSystemMonth: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`,
-        timezone: process.env.TZ || 'UTC'
+        today: today,
+        serverTime: new Date().toISOString(),
+        testUrls: {
+            todaysSMS: '/api/vonage/usage/sms',
+            specificDate: '/api/vonage/usage/sms/2025-09-24',  // Yesterday's data from CSV
+            dashboard: '/api/vonage/dashboard/summary'
+        },
+        message: 'Use these endpoints to test SMS data retrieval'
     });
-});
-
-// Test endpoint to try a specific date range matching the CSV
-app.get('/api/test/csv-date-range', authenticateToken, async (req, res) => {
-    try {
-        // Use the exact date from the CSV file
-        const records = await fetchSMSReports('2025-09-24', '2025-09-24');
-        const data = processRecords(records);
-        
-        res.json({
-            success: true,
-            dateRange: '2025-09-24 to 2025-09-24',
-            recordCount: records.length,
-            processedData: data,
-            rawRecords: records.slice(0, 5)  // First 5 records for debugging
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
 });
 
 // =================== ERROR HANDLERS ===================

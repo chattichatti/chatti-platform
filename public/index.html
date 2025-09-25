@@ -258,13 +258,14 @@
             background: #5a67d8;
         }
         
-        .btn-success {
-            background: #28a745;
+        .btn-secondary {
+            background: #6c757d;
             color: white;
+            margin-left: 10px;
         }
         
-        .btn-success:hover {
-            background: #218838;
+        .btn-secondary:hover {
+            background: #5a6268;
         }
         
         .table {
@@ -336,87 +337,21 @@
             color: #6c757d;
         }
         
-        .modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.5);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
+        .date-display {
+            background: #f8f9fa;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 14px;
+            color: #495057;
         }
         
-        .modal.active {
-            display: flex;
-        }
-        
-        .modal-content {
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            width: 90%;
-            max-width: 500px;
-            max-height: 90vh;
-            overflow-y: auto;
-        }
-        
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-        
-        .modal-title {
-            font-size: 20px;
-            font-weight: 600;
-        }
-        
-        .modal-close {
-            font-size: 24px;
-            cursor: pointer;
-            color: #6c757d;
-            border: none;
-            background: none;
-        }
-        
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-        }
-        
-        select {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
+        .summary-info {
+            background: #e7f3ff;
+            border: 1px solid #b3d9ff;
+            padding: 15px;
             border-radius: 5px;
-            background: white;
-        }
-        
-        .filter-bar {
-            display: flex;
-            gap: 15px;
             margin-bottom: 20px;
-            align-items: center;
-        }
-        
-        .filter-bar select {
-            width: auto;
-            min-width: 150px;
-        }
-        
-        .session-warning {
-            background: #fff3cd;
-            border: 1px solid #ffc107;
-            color: #856404;
-            padding: 10px;
-            margin-bottom: 20px;
-            border-radius: 5px;
-            text-align: center;
+            color: #004085;
         }
     </style>
 </head>
@@ -449,124 +384,66 @@
             <h1>📡 Chatti Platform</h1>
             <div class="user-info">
                 <span id="userEmail"></span>
-                <span id="sessionTimer" style="font-size: 12px; opacity: 0.8;"></span>
+                <span id="currentDate" class="date-display"></span>
                 <button class="logout-btn" onclick="logout()">Logout</button>
             </div>
         </header>
 
         <nav class="nav-tabs">
             <div class="nav-tab active" onclick="switchTab('dashboard')">Dashboard</div>
-            <div class="nav-tab" onclick="switchTab('customers')">Customers</div>
-            <div class="nav-tab" onclick="switchTab('vonage')">Vonage Accounts</div>
-            <div class="nav-tab" onclick="switchTab('xero')">Xero Integration</div>
-            <div class="nav-tab" onclick="switchTab('billing')">Billing</div>
             <div class="nav-tab" onclick="switchTab('settings')">Settings</div>
         </nav>
 
         <div class="content">
-            <div id="sessionWarning" class="session-warning" style="display: none;">
-                Your session will expire soon. Please save your work.
-            </div>
-
             <!-- Dashboard Tab -->
             <div id="dashboard-tab" class="tab-content active">
+                <div class="summary-info">
+                    <strong>📊 Today's SMS Usage Report</strong> - 
+                    Showing all SMS activity for <span id="reportDate"></span> across master account and all sub-accounts
+                </div>
+
                 <div class="stats-grid">
                     <div class="stat-card">
-                        <div class="stat-label">Total SMS (Current Month)</div>
+                        <div class="stat-label">Total SMS Today</div>
                         <div class="stat-value" id="totalSMS">0</div>
-                        <div class="stat-change positive">Loading...</div>
+                        <div class="stat-change" id="totalSMSChange">Loading...</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-label">Active Customers</div>
-                        <div class="stat-value" id="activeCustomers">0</div>
-                        <div class="stat-change">Loading...</div>
+                        <div class="stat-label">Active Accounts</div>
+                        <div class="stat-value" id="activeAccounts">0</div>
+                        <div class="stat-change">Accounts with SMS today</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-label">Phone Numbers</div>
-                        <div class="stat-value" id="totalNumbers">0</div>
-                        <div class="stat-change">Loading...</div>
+                        <div class="stat-label">Total Cost Today</div>
+                        <div class="stat-value" id="totalCost">$0.00</div>
+                        <div class="stat-change">USD</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-label">Monthly Revenue</div>
-                        <div class="stat-value" id="monthlyRevenue">$0</div>
-                        <div class="stat-change positive">Loading...</div>
+                        <div class="stat-label">Countries Reached</div>
+                        <div class="stat-value" id="countriesReached">0</div>
+                        <div class="stat-change">Unique destinations</div>
                     </div>
                 </div>
 
                 <div class="section">
                     <div class="section-title">
-                        SMS Usage by Country (Current Month)
-                        <button class="btn btn-primary" onclick="refreshSMSUsage()">Refresh</button>
+                        SMS Usage by Country (Today)
+                        <div>
+                            <button class="btn btn-primary" onclick="refreshTodayData()">Refresh Today</button>
+                            <button class="btn btn-secondary" onclick="loadYesterday()">Yesterday</button>
+                        </div>
                     </div>
                     <div id="smsUsageContent">
-                        <div class="loading">Loading SMS usage data</div>
+                        <div class="loading">Loading today's SMS data</div>
                     </div>
                 </div>
 
-                <div class="section">
-                    <div class="section-title">Recent Activity</div>
-                    <div id="recentActivity">
-                        <div class="loading">Loading recent activity</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Customers Tab -->
-            <div id="customers-tab" class="tab-content">
                 <div class="section">
                     <div class="section-title">
-                        Customer Management
-                        <button class="btn btn-primary" onclick="showLinkCustomerModal()">+ Link Customer</button>
+                        SMS by Account (Today)
                     </div>
-                    <div class="filter-bar">
-                        <select id="customerFilter">
-                            <option value="all">All Customers</option>
-                            <option value="active">Active</option>
-                            <option value="suspended">Suspended</option>
-                        </select>
-                        <input type="text" placeholder="Search customers..." id="customerSearch" style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 5px;">
-                    </div>
-                    <div id="customersContent">
-                        <div class="loading">Loading customers</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Vonage Tab -->
-            <div id="vonage-tab" class="tab-content">
-                <div class="section">
-                    <div class="section-title">
-                        Vonage Sub-Accounts
-                        <button class="btn btn-primary" onclick="createSubAccount()">+ Create Sub-Account</button>
-                    </div>
-                    <div id="vonageContent">
-                        <div class="loading">Loading Vonage accounts</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Xero Tab -->
-            <div id="xero-tab" class="tab-content">
-                <div class="section">
-                    <div class="section-title">
-                        Xero Integration
-                        <button class="btn btn-primary" onclick="connectXero()">Connect to Xero</button>
-                    </div>
-                    <div id="xeroContent">
-                        <div class="loading">Loading Xero data</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Billing Tab -->
-            <div id="billing-tab" class="tab-content">
-                <div class="section">
-                    <div class="section-title">
-                        Billing & Invoices
-                        <button class="btn btn-success" onclick="generateInvoices()">Generate Monthly Invoices</button>
-                    </div>
-                    <div id="billingContent">
-                        <div class="loading">Loading billing information</div>
+                    <div id="accountUsageContent">
+                        <div class="loading">Loading account data</div>
                     </div>
                 </div>
             </div>
@@ -583,12 +460,6 @@
                             </div>
                         </div>
                         <div class="form-group">
-                            <label>Xero API Status</label>
-                            <div id="xeroStatus">
-                                <span class="badge badge-warning">Checking...</span>
-                            </div>
-                        </div>
-                        <div class="form-group">
                             <label>Reports API Status</label>
                             <div id="reportsStatus">
                                 <span class="badge badge-warning">Checking...</span>
@@ -601,45 +472,10 @@
         </div>
     </div>
 
-    <!-- Link Customer Modal -->
-    <div id="linkCustomerModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 class="modal-title">Link Customer Accounts</h3>
-                <button class="modal-close" onclick="closeLinkCustomerModal()">&times;</button>
-            </div>
-            <form id="linkCustomerForm">
-                <div class="form-group">
-                    <label>Customer Name</label>
-                    <input type="text" id="linkCustomerName" required>
-                </div>
-                <div class="form-group">
-                    <label>Vonage Sub-Account</label>
-                    <select id="linkVonageAccount" required>
-                        <option value="">Select sub-account...</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Xero Contact</label>
-                    <select id="linkXeroContact" required>
-                        <option value="">Select Xero contact...</option>
-                    </select>
-                </div>
-                <button type="submit" class="btn btn-primary">Link Accounts</button>
-            </form>
-        </div>
-    </div>
-
     <script>
         // Global variables
         let authToken = null;
         let currentUser = null;
-        let sessionTimeout = null;
-        let sessionWarningTimeout = null;
-        let loginAttempts = 0;
-        const MAX_LOGIN_ATTEMPTS = 5;
-        const SESSION_DURATION = 60 * 60 * 1000; // 1 hour
-        const SESSION_WARNING_TIME = 10 * 60 * 1000; // 10 minutes before expiry
 
         // Helper function to hash password in browser
         async function sha256Hex(s) {
@@ -650,17 +486,17 @@
 
         // Initialize on page load
         window.addEventListener('DOMContentLoaded', () => {
+            // Set current date
+            const today = new Date().toISOString().slice(0, 10);
+            document.getElementById('currentDate').textContent = today;
+            document.getElementById('reportDate').textContent = today;
+            
             // Check for existing session
             const storedToken = localStorage.getItem('authToken');
-            const tokenExpiry = localStorage.getItem('tokenExpiry');
-            
-            if (storedToken && tokenExpiry && new Date().getTime() < parseInt(tokenExpiry)) {
+            if (storedToken) {
                 authToken = storedToken;
                 validateSession();
             } else {
-                // Clear any expired session
-                localStorage.removeItem('authToken');
-                localStorage.removeItem('tokenExpiry');
                 showLogin();
             }
         });
@@ -676,11 +512,9 @@
                 
                 if (response.ok) {
                     showApp();
-                    startSessionTimer();
                     loadDashboard();
                 } else {
                     localStorage.removeItem('authToken');
-                    localStorage.removeItem('tokenExpiry');
                     showLogin();
                 }
             } catch (error) {
@@ -728,12 +562,6 @@
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
-            // Check login attempts
-            if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
-                showLoginMessage('error', 'Too many failed attempts. Please try again later.');
-                return;
-            }
-            
             const loginButton = document.getElementById('loginButton');
             loginButton.disabled = true;
             loginButton.textContent = 'Signing in...';
@@ -754,27 +582,21 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    loginAttempts = 0;
                     authToken = data.token;
                     currentUser = data.user;
                     
-                    // Store token with expiry
-                    const expiry = new Date().getTime() + SESSION_DURATION;
+                    // Store token
                     localStorage.setItem('authToken', authToken);
-                    localStorage.setItem('tokenExpiry', expiry.toString());
                     
                     // Clear form
                     document.getElementById('password').value = '';
                     
                     showApp();
-                    startSessionTimer();
                     loadDashboard();
                 } else {
-                    loginAttempts++;
                     showLoginMessage('error', data.message || 'Invalid email or password');
                 }
             } catch (error) {
-                loginAttempts++;
                 showLoginMessage('error', 'Connection error. Please try again.');
             } finally {
                 loginButton.disabled = false;
@@ -795,7 +617,6 @@
         function showLogin() {
             document.getElementById('loginScreen').style.display = 'flex';
             document.getElementById('appScreen').style.display = 'none';
-            clearSessionTimers();
         }
 
         function showApp() {
@@ -806,49 +627,10 @@
             }
         }
 
-        function startSessionTimer() {
-            // Clear any existing timers
-            clearSessionTimers();
-            
-            // Set warning timer (10 minutes before expiry)
-            sessionWarningTimeout = setTimeout(() => {
-                document.getElementById('sessionWarning').style.display = 'block';
-            }, SESSION_DURATION - SESSION_WARNING_TIME);
-            
-            // Set expiry timer
-            sessionTimeout = setTimeout(() => {
-                alert('Your session has expired. Please log in again.');
-                logout();
-            }, SESSION_DURATION);
-            
-            // Update session timer display
-            updateSessionTimer();
-        }
-
-        function clearSessionTimers() {
-            if (sessionTimeout) clearTimeout(sessionTimeout);
-            if (sessionWarningTimeout) clearTimeout(sessionWarningTimeout);
-            document.getElementById('sessionWarning').style.display = 'none';
-        }
-
-        function updateSessionTimer() {
-            const expiry = localStorage.getItem('tokenExpiry');
-            if (expiry) {
-                const remaining = parseInt(expiry) - new Date().getTime();
-                if (remaining > 0) {
-                    const minutes = Math.floor(remaining / 60000);
-                    document.getElementById('sessionTimer').textContent = `Session: ${minutes}m`;
-                    setTimeout(updateSessionTimer, 60000); // Update every minute
-                }
-            }
-        }
-
         function logout() {
             localStorage.removeItem('authToken');
-            localStorage.removeItem('tokenExpiry');
             authToken = null;
             currentUser = null;
-            clearSessionTimers();
             showLogin();
         }
 
@@ -868,171 +650,156 @@
                 case 'dashboard':
                     loadDashboard();
                     break;
-                case 'customers':
-                    loadCustomers();
-                    break;
-                case 'vonage':
-                    loadVonageAccounts();
-                    break;
-                case 'xero':
-                    loadXeroData();
-                    break;
-                case 'billing':
-                    loadBillingData();
-                    break;
                 case 'settings':
                     testConnections();
                     break;
             }
         }
 
-        // Load Dashboard
+        // Load Dashboard with today's data
         async function loadDashboard() {
-            try {
-                await refreshSMSUsage();
-                
-                const subAccounts = await apiCall('/api/vonage/subaccounts');
-                if (subAccounts.success && subAccounts.data) {
-                    document.getElementById('activeCustomers').textContent = subAccounts.data.length;
-                }
-                
-                document.getElementById('recentActivity').innerHTML = `
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Time</th>
-                                <th>Account</th>
-                                <th>Activity</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>2 mins ago</td>
-                                <td>Sample Account</td>
-                                <td>SMS sent</td>
-                                <td><span class="badge badge-success">Delivered</span></td>
-                            </tr>
-                        </tbody>
-                    </table>
-                `;
-            } catch (error) {
-                console.error('Dashboard load error:', error);
-            }
+            console.log('Loading dashboard for today...');
+            await refreshTodayData();
         }
 
-        // Refresh SMS Usage
-        async function refreshSMSUsage() {
-            const container = document.getElementById('smsUsageContent');
-            container.innerHTML = '<div class="loading">Loading SMS usage data</div>';
+        // Refresh today's SMS data
+        async function refreshTodayData() {
+            console.log('Fetching today\'s SMS data...');
+            
+            const smsContainer = document.getElementById('smsUsageContent');
+            const accountContainer = document.getElementById('accountUsageContent');
+            
+            smsContainer.innerHTML = '<div class="loading">Loading today\'s SMS data</div>';
+            accountContainer.innerHTML = '<div class="loading">Loading account data</div>';
             
             try {
-                const currentMonth = new Date().toISOString().slice(0, 7);
-                const data = await apiCall(`/api/vonage/usage/sms?month=${currentMonth}`);
+                // Fetch today's data
+                const data = await apiCall('/api/vonage/usage/sms');
+                console.log('API Response:', data);
                 
-                if (data.success) {
+                if (data.success && data.data) {
+                    // Update stats
                     document.getElementById('totalSMS').textContent = data.data.total || '0';
+                    document.getElementById('totalSMSChange').textContent = `${data.data.outbound || 0} outbound`;
+                    document.getElementById('activeAccounts').textContent = Object.keys(data.data.bySubAccount || {}).length;
+                    document.getElementById('totalCost').textContent = `$${(data.data.totalCost || 0).toFixed(2)}`;
+                    document.getElementById('countriesReached').textContent = Object.keys(data.data.byCountry || {}).length;
                     
+                    // Display by country
                     if (data.data.byCountry && Object.keys(data.data.byCountry).length > 0) {
-                        let html = '<table class="table"><thead><tr><th>Country</th><th>SMS Count</th><th>Cost</th></tr></thead><tbody>';
+                        let html = '<table class="table"><thead><tr><th>Country</th><th>SMS Count</th><th>Cost (USD)</th></tr></thead><tbody>';
                         
                         for (const [country, info] of Object.entries(data.data.byCountry)) {
                             html += `
                                 <tr>
                                     <td>${country}</td>
                                     <td>${info.count}</td>
-                                    <td>$${(info.cost || 0).toFixed(2)}</td>
+                                    <td>$${(info.cost || 0).toFixed(4)}</td>
                                 </tr>
                             `;
                         }
                         
                         html += '</tbody></table>';
-                        container.innerHTML = html;
+                        smsContainer.innerHTML = html;
                     } else {
-                        container.innerHTML = '<div class="empty-state">No SMS usage data for current month</div>';
+                        smsContainer.innerHTML = '<div class="empty-state">No SMS usage today yet</div>';
                     }
+                    
+                    // Display by account
+                    if (data.data.bySubAccount && Object.keys(data.data.bySubAccount).length > 0) {
+                        let html = '<table class="table"><thead><tr><th>Account ID</th><th>SMS Count</th><th>Cost (USD)</th></tr></thead><tbody>';
+                        
+                        // Sort by count descending
+                        const sortedAccounts = Object.entries(data.data.bySubAccount)
+                            .sort((a, b) => b[1].count - a[1].count)
+                            .slice(0, 10); // Top 10 accounts
+                        
+                        for (const [accountId, info] of sortedAccounts) {
+                            html += `
+                                <tr>
+                                    <td>${accountId}</td>
+                                    <td>${info.count}</td>
+                                    <td>$${(info.cost || 0).toFixed(4)}</td>
+                                </tr>
+                            `;
+                        }
+                        
+                        if (Object.keys(data.data.bySubAccount).length > 10) {
+                            html += `<tr><td colspan="3" style="text-align: center; color: #6c757d;">...and ${Object.keys(data.data.bySubAccount).length - 10} more accounts</td></tr>`;
+                        }
+                        
+                        html += '</tbody></table>';
+                        accountContainer.innerHTML = html;
+                    } else {
+                        accountContainer.innerHTML = '<div class="empty-state">No account activity today</div>';
+                    }
+                    
+                    // Show last updated time
+                    if (data.data.total > 0) {
+                        console.log(`Successfully loaded ${data.data.total} SMS records for today`);
+                    }
+                    
                 } else {
-                    container.innerHTML = '<div class="error-message">Failed to load SMS usage</div>';
+                    console.error('Failed to load data:', data);
+                    smsContainer.innerHTML = '<div class="error-message">Failed to load SMS data</div>';
+                    accountContainer.innerHTML = '<div class="error-message">Failed to load account data</div>';
                 }
             } catch (error) {
-                container.innerHTML = '<div class="error-message">Failed to load SMS usage data</div>';
+                console.error('Error fetching SMS data:', error);
+                smsContainer.innerHTML = '<div class="error-message">Error loading SMS data</div>';
+                accountContainer.innerHTML = '<div class="error-message">Error loading account data</div>';
             }
         }
 
-        // Load Customers
-        async function loadCustomers() {
-            const container = document.getElementById('customersContent');
-            container.innerHTML = '<div class="loading">Loading customers</div>';
+        // Load yesterday's data
+        async function loadYesterday() {
+            console.log('Fetching yesterday\'s SMS data...');
+            
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const yesterdayStr = yesterday.toISOString().slice(0, 10);
+            
+            document.getElementById('reportDate').textContent = yesterdayStr;
+            
+            const smsContainer = document.getElementById('smsUsageContent');
+            smsContainer.innerHTML = '<div class="loading">Loading yesterday\'s SMS data</div>';
             
             try {
-                const subAccounts = await apiCall('/api/vonage/subaccounts');
+                const data = await apiCall(`/api/vonage/usage/sms/${yesterdayStr}`);
+                console.log('Yesterday\'s data:', data);
                 
-                if (subAccounts.success && subAccounts.data) {
-                    let html = '<table class="table"><thead><tr><th>Account ID</th><th>Name</th><th>Balance</th><th>Status</th></tr></thead><tbody>';
+                // Update display similar to today's data
+                if (data.success && data.data) {
+                    // Update stats for yesterday
+                    document.getElementById('totalSMS').textContent = data.data.total || '0';
+                    document.getElementById('totalSMSChange').textContent = `Yesterday (${yesterdayStr})`;
+                    document.getElementById('activeAccounts').textContent = Object.keys(data.data.bySubAccount || {}).length;
+                    document.getElementById('totalCost').textContent = `$${(data.data.totalCost || 0).toFixed(2)}`;
                     
-                    for (const account of subAccounts.data) {
-                        html += `
-                            <tr>
-                                <td>${account.api_key}</td>
-                                <td>${account.name || 'N/A'}</td>
-                                <td>$${(account.balance || 0).toFixed(2)}</td>
-                                <td>${account.suspended ? '<span class="badge badge-danger">Suspended</span>' : '<span class="badge badge-success">Active</span>'}</td>
-                            </tr>
-                        `;
+                    // Display data similar to today
+                    if (data.data.byCountry && Object.keys(data.data.byCountry).length > 0) {
+                        let html = '<table class="table"><thead><tr><th>Country</th><th>SMS Count</th><th>Cost (USD)</th></tr></thead><tbody>';
+                        
+                        for (const [country, info] of Object.entries(data.data.byCountry)) {
+                            html += `
+                                <tr>
+                                    <td>${country}</td>
+                                    <td>${info.count}</td>
+                                    <td>$${(info.cost || 0).toFixed(4)}</td>
+                                </tr>
+                            `;
+                        }
+                        
+                        html += '</tbody></table>';
+                        smsContainer.innerHTML = html;
+                    } else {
+                        smsContainer.innerHTML = `<div class="empty-state">No SMS usage on ${yesterdayStr}</div>`;
                     }
-                    
-                    html += '</tbody></table>';
-                    container.innerHTML = html;
-                } else {
-                    container.innerHTML = '<div class="empty-state">No customers found</div>';
                 }
             } catch (error) {
-                container.innerHTML = '<div class="error-message">Failed to load customers</div>';
+                console.error('Error loading yesterday:', error);
+                smsContainer.innerHTML = '<div class="error-message">Failed to load yesterday\'s data</div>';
             }
-        }
-
-        // Load Vonage Accounts
-        async function loadVonageAccounts() {
-            const container = document.getElementById('vonageContent');
-            container.innerHTML = '<div class="loading">Loading Vonage accounts</div>';
-            
-            try {
-                const data = await apiCall('/api/vonage/subaccounts');
-                
-                if (data.success && data.data && data.data.length > 0) {
-                    let html = '<table class="table"><thead><tr><th>API Key</th><th>Name</th><th>Balance</th><th>Status</th></tr></thead><tbody>';
-                    
-                    for (const account of data.data) {
-                        html += `
-                            <tr>
-                                <td>${account.api_key}</td>
-                                <td>${account.name || 'N/A'}</td>
-                                <td>$${(account.balance || 0).toFixed(2)}</td>
-                                <td>${account.suspended ? '<span class="badge badge-danger">Suspended</span>' : '<span class="badge badge-success">Active</span>'}</td>
-                            </tr>
-                        `;
-                    }
-                    
-                    html += '</tbody></table>';
-                    container.innerHTML = html;
-                } else {
-                    container.innerHTML = '<div class="empty-state">No sub-accounts found</div>';
-                }
-            } catch (error) {
-                container.innerHTML = '<div class="error-message">Failed to load Vonage accounts</div>';
-            }
-        }
-
-        // Load Xero Data
-        async function loadXeroData() {
-            const container = document.getElementById('xeroContent');
-            container.innerHTML = '<div class="empty-state">Xero integration not configured</div>';
-        }
-
-        // Load Billing Data
-        async function loadBillingData() {
-            const container = document.getElementById('billingContent');
-            container.innerHTML = '<div class="empty-state">No billing data available</div>';
         }
 
         // Test all connections
@@ -1050,39 +817,16 @@
             }
             
             try {
-                const reportsTest = await apiCall('/api/vonage/test-reports');
+                const testInfo = await apiCall('/api/test/today');
                 const reportsStatus = document.getElementById('reportsStatus');
-                if (reportsTest.success) {
-                    reportsStatus.innerHTML = '<span class="badge badge-success">Available</span>';
+                if (testInfo.today) {
+                    reportsStatus.innerHTML = `<span class="badge badge-success">Ready</span> Today: ${testInfo.today}`;
                 } else {
-                    reportsStatus.innerHTML = '<span class="badge badge-danger">Not Available</span>';
+                    reportsStatus.innerHTML = '<span class="badge badge-warning">Check logs</span>';
                 }
             } catch (error) {
                 document.getElementById('reportsStatus').innerHTML = '<span class="badge badge-danger">Error</span>';
             }
-            
-            document.getElementById('xeroStatus').innerHTML = '<span class="badge badge-warning">Not Connected</span>';
-        }
-
-        // Modal functions
-        function showLinkCustomerModal() {
-            alert('Customer linking functionality coming soon');
-        }
-
-        function closeLinkCustomerModal() {
-            document.getElementById('linkCustomerModal').classList.remove('active');
-        }
-
-        function createSubAccount() {
-            alert('Sub-account creation functionality coming soon');
-        }
-
-        function generateInvoices() {
-            alert('Invoice generation functionality coming soon');
-        }
-
-        function connectXero() {
-            alert('Xero connection functionality coming soon');
         }
     </script>
 </body>
