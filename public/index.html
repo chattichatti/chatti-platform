@@ -268,6 +268,16 @@
             background: #5a6268;
         }
         
+        .btn-success {
+            background: #28a745;
+            color: white;
+            margin-left: 10px;
+        }
+        
+        .btn-success:hover {
+            background: #218838;
+        }
+        
         .table {
             width: 100%;
             border-collapse: collapse;
@@ -354,21 +364,13 @@
             color: #004085;
         }
         
-        .currency-display {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-        
-        .currency-value {
-            font-size: 12px;
-            color: #6c757d;
-        }
-        
-        .currency-value.primary {
-            font-size: 14px;
-            color: #495057;
-            font-weight: 600;
+        .warning-info {
+            background: #fff3cd;
+            border: 1px solid #ffeeba;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            color: #856404;
         }
 
         .account-badge {
@@ -377,6 +379,25 @@
             border-radius: 3px;
             font-size: 11px;
             margin-left: 5px;
+        }
+        
+        .progress-bar {
+            background: #e9ecef;
+            border-radius: 4px;
+            height: 20px;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            background: #667eea;
+            height: 100%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
         }
     </style>
 </head>
@@ -422,10 +443,22 @@
         <div class="content">
             <!-- Dashboard Tab -->
             <div id="dashboard-tab" class="tab-content active">
-                <div class="summary-info">
-                    <strong>📊 Today's SMS Usage Report</strong> - 
-                    <span style="color: green;">✓ Single API call retrieves all sub-accounts</span><br>
-                    Showing SMS activity for <span id="reportDate"></span> - All accounts in one query
+                <div class="summary-info" id="reportStatus">
+                    <strong>📊 Multi-Account SMS Report</strong> - 
+                    <span style="color: green;">✓ Creating individual reports per API key</span><br>
+                    Showing SMS activity for <span id="reportDate"></span>
+                </div>
+                
+                <div class="warning-info" id="limitWarning">
+                    ⚠️ Currently limited to first 10 accounts for safety. Remove limit in production.
+                </div>
+                
+                <div id="progressContainer" style="display:none;">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressBar" style="width: 0%">
+                            <span id="progressText">0%</span>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="stats-grid">
@@ -437,7 +470,7 @@
                     <div class="stat-card">
                         <div class="stat-label">Active Accounts</div>
                         <div class="stat-value" id="activeAccounts">0</div>
-                        <div class="stat-change">Accounts with SMS today</div>
+                        <div class="stat-change" id="accountsQueried">of 0 accounts queried</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-label">Total Cost (EUR)</div>
@@ -453,10 +486,11 @@
 
                 <div class="section">
                     <div class="section-title">
-                        SMS by API Account (Today)
+                        SMS by API Account (Individual Reports)
                         <div>
-                            <button class="btn btn-primary" onclick="refreshTodayData()">Refresh Data</button>
-                            <button class="btn btn-secondary" onclick="loadYesterday()">Yesterday</button>
+                            <button class="btn btn-primary" onclick="loadMultiAccountData()">Refresh All (10 Accounts)</button>
+                            <button class="btn btn-success" onclick="loadFullAccountData()">Load All Accounts</button>
+                            <button class="btn btn-secondary" onclick="testSingleAccount()">Test Single</button>
                         </div>
                     </div>
                     <div id="accountUsageContent">
@@ -466,10 +500,19 @@
 
                 <div class="section">
                     <div class="section-title">
-                        SMS Usage by Country (Today)
+                        Failed Accounts
+                        <span id="failedCount" style="font-size: 14px; color: #dc3545;"></span>
                     </div>
-                    <div id="smsUsageContent">
-                        <div class="loading">Loading country data</div>
+                    <div id="failedAccountsContent" style="display:none;">
+                        <table class="table" id="failedAccountsTable">
+                            <thead>
+                                <tr>
+                                    <th>Account ID</th>
+                                    <th>Error</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -486,8 +529,8 @@
                             </div>
                         </div>
                         <div class="form-group">
-                            <label>Reports API Status</label>
-                            <div id="reportsStatus">
+                            <label>Sub-Accounts</label>
+                            <div id="subAccountsStatus">
                                 <span class="badge badge-warning">Checking...</span>
                             </div>
                         </div>
@@ -498,6 +541,13 @@
                             </div>
                         </div>
                         <button class="btn btn-primary" onclick="testConnections()">Test All Connections</button>
+                        <button class="btn btn-secondary" onclick="listAllAccounts()">List All Sub-Accounts</button>
+                    </div>
+                </div>
+                <div class="section" id="accountListSection" style="display:none;">
+                    <div class="section-title">All Sub-Accounts</div>
+                    <div id="accountListContent">
+                        <div class="loading">Loading accounts...</div>
                     </div>
                 </div>
             </div>
@@ -689,46 +739,56 @@
             }
         }
 
-        // Load Dashboard with today's data
+        // Load Dashboard with multi-account data
         async function loadDashboard() {
-            console.log('Loading dashboard for today...');
-            await refreshTodayData();
+            console.log('Loading dashboard with multi-account data...');
+            await loadMultiAccountData();
         }
 
-        // Refresh today's SMS data
-        async function refreshTodayData() {
-            console.log('Fetching today\'s SMS data...');
+        // Load multi-account data (limited to 10)
+        async function loadMultiAccountData() {
+            console.log('Fetching multi-account SMS data (10 accounts max)...');
             
             const accountContainer = document.getElementById('accountUsageContent');
-            const countryContainer = document.getElementById('smsUsageContent');
+            const statusDiv = document.getElementById('reportStatus');
             
-            accountContainer.innerHTML = '<div class="loading">Loading account data</div>';
-            countryContainer.innerHTML = '<div class="loading">Loading country data</div>';
+            accountContainer.innerHTML = '<div class="loading">Creating individual reports for each API account...</div>';
+            statusDiv.innerHTML = '<strong>⏳ Processing...</strong> Creating separate reports for each API key...';
             
             try {
-                const data = await apiCall('/api/vonage/usage/sms/today-safe');
-                console.log('API Response:', data);
+                const data = await apiCall('/api/vonage/usage/sms/multi-account-today');
+                console.log('Multi-Account Response:', data);
                 currentData = data;
                 
-                if (data.success && data.data) {
-                    // Update stats
-                    document.getElementById('totalSMS').textContent = data.data.total || '0';
-                    document.getElementById('totalSMSChange').textContent = `${data.data.outbound || 0} outbound`;
-                    document.getElementById('activeAccounts').textContent = data.activeAccounts || Object.keys(data.perAccount || {}).length;
+                if (data.success) {
+                    // Update status
+                    statusDiv.innerHTML = `
+                        <strong>✅ Multi-Account Report Complete</strong><br>
+                        Queried ${data.accountsQueried} accounts individually | 
+                        ${data.accountsWithData} accounts have SMS activity | 
+                        ${data.failedAccounts} failed
+                    `;
                     
-                    // Update costs with EUR and AUD
-                    const costEUR = data.data.totalCost || 0;
-                    const costAUD = data.data.totalCostAUD || 0;
+                    // Update stats
+                    document.getElementById('totalSMS').textContent = data.summary?.totalSMS || '0';
+                    document.getElementById('totalSMSChange').textContent = `from ${data.accountsWithData} accounts`;
+                    document.getElementById('activeAccounts').textContent = data.accountsWithData || '0';
+                    document.getElementById('accountsQueried').textContent = `of ${data.accountsQueried} accounts queried`;
+                    
+                    // Update costs
+                    const costEUR = data.summary?.totalCostEUR || 0;
+                    const costAUD = data.summary?.totalCostAUD || 0;
                     document.getElementById('totalCostEUR').textContent = `€${costEUR.toFixed(2)}`;
                     document.getElementById('totalCostAUD').textContent = `A$${costAUD.toFixed(2)}`;
                     
-                    document.getElementById('countriesReached').textContent = Object.keys(data.data.byCountry || {}).length;
+                    document.getElementById('countriesReached').textContent = data.summary?.countriesReached || '0';
                     
-                    // Display per-account breakdown
-                    if (data.perAccount && Object.keys(data.perAccount).length > 0) {
+                    // Display per-account results
+                    if (data.accounts && data.accounts.length > 0) {
                         let html = '<table class="table">';
                         html += '<thead><tr>';
                         html += '<th>Account ID</th>';
+                        html += '<th>Account Name</th>';
                         html += '<th>SMS Count</th>';
                         html += '<th>Cost (EUR)</th>';
                         html += '<th>Cost (AUD)</th>';
@@ -736,21 +796,17 @@
                         html += '</tr></thead><tbody>';
                         
                         // Sort accounts by SMS count
-                        const sortedAccounts = Object.entries(data.perAccount)
-                            .sort((a, b) => b[1].count - a[1].count);
+                        const sortedAccounts = data.accounts.sort((a, b) => b.count - a.count);
                         
-                        for (const [accountId, info] of sortedAccounts) {
-                            const displayId = info.name !== accountId ? 
-                                `${accountId}<span class="account-badge">${info.name}</span>` : 
-                                accountId;
-                            
+                        for (const account of sortedAccounts) {
                             html += `
                                 <tr>
-                                    <td>${displayId}</td>
-                                    <td>${info.count}</td>
-                                    <td>€${(info.cost || 0).toFixed(4)}</td>
-                                    <td>A$${(info.costAUD || 0).toFixed(4)}</td>
-                                    <td>${info.countries ? info.countries.join(', ') : 'N/A'}</td>
+                                    <td>${account.accountId}</td>
+                                    <td>${account.accountName}</td>
+                                    <td>${account.count}</td>
+                                    <td>€${account.costEUR.toFixed(4)}</td>
+                                    <td>A$${account.costAUD.toFixed(4)}</td>
+                                    <td>${account.countries.join(', ')}</td>
                                 </tr>
                             `;
                         }
@@ -758,88 +814,111 @@
                         html += '</tbody></table>';
                         accountContainer.innerHTML = html;
                         
-                        console.log(`Loaded ${sortedAccounts.length} accounts with activity`);
+                        console.log(`Successfully loaded ${data.accounts.length} accounts with activity`);
                     } else {
-                        accountContainer.innerHTML = '<div class="empty-state">No account activity today</div>';
+                        accountContainer.innerHTML = '<div class="empty-state">No account activity found today</div>';
                     }
                     
-                    // Display by country
-                    if (data.data.byCountry && Object.keys(data.data.byCountry).length > 0) {
-                        let html = '<table class="table">';
-                        html += '<thead><tr>';
-                        html += '<th>Country</th>';
-                        html += '<th>SMS Count</th>';
-                        html += '<th>Cost (EUR)</th>';
-                        html += '<th>Cost (AUD)</th>';
-                        html += '</tr></thead><tbody>';
+                    // Show failed accounts if any
+                    if (data.failedAccountsList && data.failedAccountsList.length > 0) {
+                        document.getElementById('failedCount').textContent = `(${data.failedAccountsList.length} failed)`;
+                        document.getElementById('failedAccountsContent').style.display = 'block';
                         
-                        // Sort countries by SMS count
-                        const sortedCountries = Object.entries(data.data.byCountry)
-                            .sort((a, b) => b[1].count - a[1].count);
+                        const tbody = document.querySelector('#failedAccountsTable tbody');
+                        tbody.innerHTML = '';
                         
-                        for (const [country, info] of sortedCountries) {
-                            html += `
+                        for (const failed of data.failedAccountsList) {
+                            tbody.innerHTML += `
                                 <tr>
-                                    <td>${country}</td>
-                                    <td>${info.count}</td>
-                                    <td>€${(info.cost || 0).toFixed(4)}</td>
-                                    <td>A$${(info.costAUD || 0).toFixed(4)}</td>
+                                    <td>${failed.accountId}</td>
+                                    <td>${failed.error}</td>
                                 </tr>
                             `;
                         }
-                        
-                        html += '</tbody></table>';
-                        countryContainer.innerHTML = html;
                     } else {
-                        countryContainer.innerHTML = '<div class="empty-state">No SMS usage today yet</div>';
-                    }
-                    
-                    // Show method used
-                    if (data.accountsQueried === 1) {
-                        console.log(`✓ Efficient: Only ${data.accountsQueried} API call made`);
+                        document.getElementById('failedAccountsContent').style.display = 'none';
                     }
                     
                 } else {
-                    console.error('Failed to load data:', data);
+                    console.error('Failed to load multi-account data:', data);
+                    statusDiv.innerHTML = '<strong>❌ Error</strong> Failed to create multi-account reports';
                     accountContainer.innerHTML = '<div class="error-message">Failed to load account data</div>';
-                    countryContainer.innerHTML = '<div class="error-message">Failed to load country data</div>';
                 }
             } catch (error) {
-                console.error('Error fetching SMS data:', error);
+                console.error('Error fetching multi-account data:', error);
+                statusDiv.innerHTML = '<strong>❌ Error</strong> Error creating reports';
                 accountContainer.innerHTML = '<div class="error-message">Error loading account data</div>';
-                countryContainer.innerHTML = '<div class="error-message">Error loading country data</div>';
             }
         }
 
-        // Load yesterday's data
-        async function loadYesterday() {
-            const yesterday = new Date();
-            yesterday.setDate(yesterday.getDate() - 1);
-            const dateStr = yesterday.toISOString().slice(0, 10);
+        // Load ALL accounts (remove limit - use with caution)
+        async function loadFullAccountData() {
+            if (!confirm('This will query ALL sub-accounts individually (potentially 200+ API calls). This may take several minutes. Continue?')) {
+                return;
+            }
             
-            console.log(`Loading data for ${dateStr}...`);
+            alert('Full account loading not yet implemented. Please modify server.js to remove the 10-account limit first.');
+            // When ready, call the same endpoint but with a parameter to remove the limit
+        }
+
+        // Test single account
+        async function testSingleAccount() {
+            const accountId = prompt('Enter account ID to test:', 'f3fa74ea');
+            if (!accountId) return;
             
-            const accountContainer = document.getElementById('accountUsageContent');
-            accountContainer.innerHTML = `<div class="loading">Loading data for ${dateStr}</div>`;
+            console.log(`Testing single account: ${accountId}`);
             
             try {
-                const data = await apiCall(`/api/vonage/usage/sms/${dateStr}`);
+                const data = await apiCall(`/api/test/single-account/${accountId}`);
+                console.log('Single account test result:', data);
                 
                 if (data.success) {
-                    // Update the display with yesterday's data
-                    document.getElementById('reportDate').textContent = dateStr;
-                    
-                    // Process the response similar to today's data
-                    // You can reuse the same display logic
-                    if (data.data) {
-                        document.getElementById('totalSMS').textContent = data.data.total || '0';
-                        document.getElementById('totalCostEUR').textContent = `€${(data.data.totalCost || 0).toFixed(2)}`;
-                        document.getElementById('totalCostAUD').textContent = `A$${(data.data.totalCostAUD || 0).toFixed(2)}`;
-                    }
+                    alert(`Account ${accountId} test successful. Check console for details.`);
+                } else {
+                    alert(`Account ${accountId} test failed: ${data.error}`);
                 }
             } catch (error) {
-                console.error('Error loading yesterday data:', error);
-                accountContainer.innerHTML = '<div class="error-message">Error loading yesterday\'s data</div>';
+                alert(`Error testing account: ${error.message}`);
+            }
+        }
+
+        // List all accounts
+        async function listAllAccounts() {
+            const listSection = document.getElementById('accountListSection');
+            const listContent = document.getElementById('accountListContent');
+            
+            listSection.style.display = 'block';
+            listContent.innerHTML = '<div class="loading">Loading all sub-accounts...</div>';
+            
+            try {
+                const data = await apiCall('/api/vonage/subaccounts/list-with-keys');
+                
+                if (data.success && data.accounts) {
+                    let html = `<p>Total accounts: ${data.count}</p>`;
+                    html += '<table class="table">';
+                    html += '<thead><tr>';
+                    html += '<th>API Key</th>';
+                    html += '<th>Name</th>';
+                    html += '<th>Created</th>';
+                    html += '</tr></thead><tbody>';
+                    
+                    for (const account of data.accounts) {
+                        html += `
+                            <tr>
+                                <td>${account.api_key}${account.is_master ? ' <span class="badge badge-warning">Master</span>' : ''}</td>
+                                <td>${account.name}</td>
+                                <td>${account.created_at || 'N/A'}</td>
+                            </tr>
+                        `;
+                    }
+                    
+                    html += '</tbody></table>';
+                    listContent.innerHTML = html;
+                } else {
+                    listContent.innerHTML = '<div class="error-message">Failed to load accounts</div>';
+                }
+            } catch (error) {
+                listContent.innerHTML = '<div class="error-message">Error loading accounts</div>';
             }
         }
 
@@ -858,20 +937,15 @@
             }
             
             try {
-                const subaccounts = await apiCall('/api/vonage/subaccounts/list');
-                const reportsStatus = document.getElementById('reportsStatus');
+                const subaccounts = await apiCall('/api/vonage/subaccounts/list-with-keys');
+                const subAccountsStatus = document.getElementById('subAccountsStatus');
                 if (subaccounts.success) {
-                    reportsStatus.innerHTML = `<span class="badge badge-success">Ready</span> ${subaccounts.count} sub-accounts found`;
+                    subAccountsStatus.innerHTML = `<span class="badge badge-success">Ready</span> ${subaccounts.count} accounts available`;
                 } else {
-                    reportsStatus.innerHTML = '<span class="badge badge-warning">Check configuration</span>';
+                    subAccountsStatus.innerHTML = '<span class="badge badge-warning">Check configuration</span>';
                 }
             } catch (error) {
-                document.getElementById('reportsStatus').innerHTML = '<span class="badge badge-danger">Error</span>';
-            }
-            
-            // Show current exchange rate
-            if (currentData && currentData.currencyRate) {
-                document.getElementById('currencyRate').textContent = `1 EUR = ${currentData.currencyRate} AUD`;
+                document.getElementById('subAccountsStatus').innerHTML = '<span class="badge badge-danger">Error</span>';
             }
         }
     </script>
