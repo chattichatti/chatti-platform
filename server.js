@@ -38,7 +38,7 @@ const config = {
     vonage: {
         apiKey: String(process.env.VONAGE_API_KEY || '4c42609f'),
         apiSecret: String(process.env.VONAGE_API_SECRET || ''),
-        accountId: String(process.env.VONAGE_ACCOUNT_ID || 'f3fa74ea'), // Changed to f3fa74ea as shown in CSV
+        accountId: String(process.env.VONAGE_ACCOUNT_ID || '4c42609f'), // Corrected from f3fa74ea
         baseUrl: 'https://rest.nexmo.com',
         apiBaseUrl: 'https://api.nexmo.com'
     }
@@ -607,20 +607,80 @@ app.get('/api/vonage/dashboard/summary', authenticateToken, async (req, res) => 
     }
 });
 
-// Test endpoint to check today's date and test the API
-app.get('/api/test/today', authenticateToken, async (req, res) => {
-    const today = new Date().toISOString().slice(0, 10);
-    
-    res.json({
-        today: today,
-        serverTime: new Date().toISOString(),
-        testUrls: {
-            todaysSMS: '/api/vonage/usage/sms',
-            specificDate: '/api/vonage/usage/sms/2025-09-24',  // Yesterday's data from CSV
-            dashboard: '/api/vonage/dashboard/summary'
+// Diagnostic endpoint to test the Reports API directly
+app.get('/api/test/diagnostic', authenticateToken, async (req, res) => {
+    const diagnostics = {
+        config: {
+            apiKey: config.vonage.apiKey,
+            accountId: config.vonage.accountId,
+            hasSecret: !!config.vonage.apiSecret,
+            secretLength: config.vonage.apiSecret?.length || 0
         },
-        message: 'Use these endpoints to test SMS data retrieval'
-    });
+        tests: {}
+    };
+    
+    // Test 1: Check basic auth
+    try {
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+        const balanceResponse = await axios.get(`${config.vonage.baseUrl}/account/get-balance`, {
+            headers: { 'Authorization': `Basic ${auth}` },
+            timeout: 5000
+        });
+        diagnostics.tests.balance = {
+            success: true,
+            balance: balanceResponse.data.value,
+            status: balanceResponse.status
+        };
+    } catch (error) {
+        diagnostics.tests.balance = {
+            success: false,
+            error: error.message,
+            status: error.response?.status
+        };
+    }
+    
+    // Test 2: Try a simple synchronous report for today
+    try {
+        const today = new Date().toISOString().slice(0, 10);
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+        
+        const body = {
+            "account_id": config.vonage.accountId,
+            "product": "SMS",
+            "include_subaccounts": "true",
+            "direction": "outbound",
+            "date_start": `${today}T00:00:00+0000`,
+            "date_end": `${today}T23:59:59+0000`
+        };
+        
+        const reportResponse = await axios.post('https://api.nexmo.com/v2/reports', body, {
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 10000,
+            validateStatus: (status) => true // Accept any status to see the error
+        });
+        
+        diagnostics.tests.reports = {
+            success: reportResponse.status === 200 || reportResponse.status === 201 || reportResponse.status === 202,
+            status: reportResponse.status,
+            hasRequestId: !!reportResponse.data?.request_id,
+            hasRecords: !!reportResponse.data?.records,
+            recordCount: reportResponse.data?.records?.length || 0,
+            responseType: reportResponse.data?.request_id ? 'async' : 'sync',
+            data: reportResponse.status >= 400 ? reportResponse.data : undefined
+        };
+    } catch (error) {
+        diagnostics.tests.reports = {
+            success: false,
+            error: error.message,
+            status: error.response?.status,
+            data: error.response?.data
+        };
+    }
+    
+    res.json(diagnostics);
 });
 
 // =================== ERROR HANDLERS ===================
