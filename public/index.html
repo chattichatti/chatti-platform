@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chatti Platform - Telecommunications Management</title>
+    <title>Chatti Platform - SMS Management Dashboard</title>
     <style>
         * {
             margin: 0;
@@ -101,7 +101,7 @@
         
         .app-container {
             display: none;
-            background: white;
+            background: #f5f5f5;
             min-height: 100vh;
         }
         
@@ -140,9 +140,9 @@
         }
         
         .nav-tabs {
-            background: #f8f9fa;
+            background: white;
             padding: 0 30px;
-            border-bottom: 1px solid #dee2e6;
+            border-bottom: 2px solid #e0e0e0;
             display: flex;
             gap: 30px;
         }
@@ -177,6 +177,25 @@
             display: block;
         }
         
+        .summary-info {
+            background: #e7f3ff;
+            border: 1px solid #b3d9ff;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+            color: #004085;
+            font-size: 15px;
+        }
+        
+        .warning-info {
+            background: #fff3cd;
+            border: 1px solid #ffeeba;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            color: #856404;
+        }
+        
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -186,57 +205,59 @@
         
         .stat-card {
             background: white;
-            border: 1px solid #e9ecef;
-            border-radius: 8px;
-            padding: 20px;
-            transition: box-shadow 0.3s;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            transition: transform 0.2s, box-shadow 0.2s;
         }
         
         .stat-card:hover {
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
         }
         
         .stat-label {
             color: #6c757d;
-            font-size: 14px;
-            margin-bottom: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
         }
         
         .stat-value {
-            font-size: 28px;
+            font-size: 32px;
             font-weight: bold;
-            color: #495057;
+            color: #2c3e50;
+            margin-bottom: 5px;
         }
         
         .stat-change {
-            font-size: 12px;
-            margin-top: 5px;
-        }
-        
-        .stat-change.positive {
-            color: #28a745;
-        }
-        
-        .stat-change.negative {
-            color: #dc3545;
+            font-size: 14px;
+            color: #6c757d;
         }
         
         .section {
             background: white;
-            border: 1px solid #e9ecef;
-            border-radius: 8px;
-            padding: 20px;
+            border-radius: 10px;
+            padding: 25px;
             margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
         }
         
         .section-title {
             font-size: 18px;
             font-weight: 600;
             margin-bottom: 20px;
-            color: #495057;
+            color: #2c3e50;
             display: flex;
             justify-content: space-between;
             align-items: center;
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 8px;
         }
         
         .btn {
@@ -258,24 +279,40 @@
             background: #5a67d8;
         }
         
-        .btn-secondary {
-            background: #6c757d;
+        .btn-success {
+            background: #48bb78;
             color: white;
-            margin-left: 10px;
         }
         
-        .btn-secondary:hover {
-            background: #5a6268;
+        .btn-success:hover {
+            background: #38a169;
         }
         
         .btn-warning {
-            background: #ffc107;
-            color: #212529;
-            margin-left: 10px;
+            background: #ed8936;
+            color: white;
         }
         
         .btn-warning:hover {
-            background: #e0a800;
+            background: #dd6b20;
+        }
+        
+        .btn-danger {
+            background: #f56565;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #e53e3e;
+        }
+        
+        .btn-secondary {
+            background: #718096;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #4a5568;
         }
         
         .table {
@@ -284,21 +321,25 @@
         }
         
         .table th {
-            background: #f8f9fa;
+            background: #f7fafc;
             padding: 12px;
             text-align: left;
             font-weight: 600;
-            color: #495057;
-            border-bottom: 2px solid #dee2e6;
+            color: #4a5568;
+            border-bottom: 2px solid #e2e8f0;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
         .table td {
             padding: 12px;
-            border-bottom: 1px solid #dee2e6;
+            border-bottom: 1px solid #e2e8f0;
+            color: #2d3748;
         }
         
         .table tr:hover {
-            background: #f8f9fa;
+            background: #f7fafc;
         }
         
         .badge {
@@ -310,24 +351,19 @@
         }
         
         .badge-success {
-            background: #d4edda;
-            color: #155724;
+            background: #c6f6d5;
+            color: #22543d;
         }
         
         .badge-warning {
-            background: #fff3cd;
-            color: #856404;
-        }
-        
-        .badge-danger {
-            background: #f8d7da;
-            color: #721c24;
+            background: #fed7d7;
+            color: #742a2a;
         }
         
         .loading {
             text-align: center;
             padding: 40px;
-            color: #6c757d;
+            color: #718096;
         }
         
         .loading::after {
@@ -344,52 +380,14 @@
         .empty-state {
             text-align: center;
             padding: 60px 20px;
-            color: #6c757d;
+            color: #a0aec0;
         }
         
         .date-display {
-            background: #f8f9fa;
-            padding: 5px 10px;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 5px 12px;
             border-radius: 4px;
             font-size: 14px;
-            color: #495057;
-        }
-        
-        .summary-info {
-            background: #e7f3ff;
-            border: 1px solid #b3d9ff;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-            color: #004085;
-        }
-        
-        .warning-info {
-            background: #fff3cd;
-            border: 1px solid #ffeeba;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-            color: #856404;
-        }
-
-        .account-badge {
-            background: #e9ecef;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 11px;
-            margin-left: 5px;
-        }
-        
-        .debug-output {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-            padding: 10px;
-            font-family: monospace;
-            font-size: 12px;
-            max-height: 300px;
-            overflow-y: auto;
         }
     </style>
 </head>
@@ -399,17 +397,17 @@
         <div class="login-box">
             <h1>📡 Chatti Platform</h1>
             <p style="text-align: center; color: #6c757d; margin-bottom: 30px;">
-                Telecommunications Management System
+                SMS Management Dashboard
             </p>
             <div id="loginMessage"></div>
             <form id="loginForm">
                 <div class="form-group">
                     <label for="email">Email</label>
-                    <input type="email" id="email" placeholder="Enter your email" required>
+                    <input type="email" id="email" placeholder="Enter your email" value="admin@chatti.com" required>
                 </div>
                 <div class="form-group">
                     <label for="password">Password</label>
-                    <input type="password" id="password" placeholder="Enter your password" required>
+                    <input type="password" id="password" placeholder="Enter your password" value="admin123" required>
                 </div>
                 <button type="submit" class="login-btn" id="loginButton">Sign In</button>
             </form>
@@ -421,7 +419,7 @@
         <header class="header">
             <h1>📡 Chatti Platform</h1>
             <div class="user-info">
-                <span id="userEmail"></span>
+                <span id="userEmail">admin@chatti.com</span>
                 <span id="currentDate" class="date-display"></span>
                 <button class="logout-btn" onclick="logout()">Logout</button>
             </div>
@@ -435,10 +433,9 @@
         <div class="content">
             <!-- Dashboard Tab -->
             <div id="dashboard-tab" class="tab-content active">
-                <div class="summary-info" id="reportStatus">
-                    <strong>📊 Today's SMS Usage Report</strong> - 
-                    <span style="color: green;">✓ Single API call retrieves all sub-accounts</span><br>
-                    Showing SMS activity for <span id="reportDate"></span>
+                <div id="reportStatus" class="summary-info">
+                    📊 <strong>Today's SMS Usage Report</strong> - Single API call retrieves all sub-accounts<br>
+                    Showing SMS activity for <span id="reportDate">2025-09-25</span>
                 </div>
 
                 <div class="stats-grid">
@@ -450,7 +447,7 @@
                     <div class="stat-card">
                         <div class="stat-label">Active Accounts</div>
                         <div class="stat-value" id="activeAccounts">0</div>
-                        <div class="stat-change">Unique API accounts</div>
+                        <div class="stat-change" id="accountsStatus">Unique API accounts</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-label">Total Cost (EUR)</div>
@@ -467,10 +464,11 @@
                 <div class="section">
                     <div class="section-title">
                         SMS by API Account
-                        <div>
-                            <button class="btn btn-primary" onclick="refreshTodayData()">Refresh Data</button>
-                            <button class="btn btn-warning" onclick="debugCSVFields()">Debug CSV</button>
-                            <button class="btn btn-secondary" onclick="loadYesterday()">Yesterday</button>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="refreshData()">Refresh Data</button>
+                            <button class="btn btn-success" onclick="loadMultipleAccounts(10)">Load 10 Accounts</button>
+                            <button class="btn btn-warning" onclick="loadMultipleAccounts(50)">Load 50 Accounts</button>
+                            <button class="btn btn-danger" onclick="loadMultipleAccounts(500)">Load ALL Accounts</button>
                         </div>
                     </div>
                     <div id="accountUsageContent">
@@ -482,16 +480,9 @@
                     <div class="section-title">
                         SMS Usage by Country
                     </div>
-                    <div id="countryUsageContent">
+                    <div id="smsUsageContent">
                         <div class="loading">Loading country data</div>
                     </div>
-                </div>
-
-                <div class="section" id="debugSection" style="display:none;">
-                    <div class="section-title">
-                        CSV Debug Information
-                    </div>
-                    <div class="debug-output" id="debugOutput"></div>
                 </div>
             </div>
 
@@ -506,19 +497,17 @@
                                 <span class="badge badge-warning">Checking...</span>
                             </div>
                         </div>
-                        <div class="form-group">
-                            <label>Sub-Accounts</label>
+                        <div class="form-group" style="margin-top: 15px;">
+                            <label>Sub-Accounts Available</label>
                             <div id="subAccountsStatus">
                                 <span class="badge badge-warning">Checking...</span>
                             </div>
                         </div>
-                        <div class="form-group">
-                            <label>Currency Exchange Rate</label>
-                            <div id="currencyRate">
-                                1 EUR = 1.64 AUD (approx)
-                            </div>
+                        <div class="form-group" style="margin-top: 15px;">
+                            <label>Exchange Rate</label>
+                            <div>1 EUR = 1.64 AUD</div>
                         </div>
-                        <button class="btn btn-primary" onclick="testConnections()">Test All Connections</button>
+                        <button class="btn btn-primary" onclick="testConnections()">Test Connections</button>
                     </div>
                 </div>
             </div>
@@ -531,44 +520,36 @@
         let currentUser = null;
         let currentData = null;
 
-        // Helper function to hash password in browser
+        // Helper to hash password
         async function sha256Hex(s) {
             const enc = new TextEncoder().encode(s);
             const buf = await crypto.subtle.digest('SHA-256', enc);
             return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join('');
         }
 
-        // Initialize on page load
+        // Initialize
         window.addEventListener('DOMContentLoaded', () => {
-            // Set current date
             const today = new Date().toISOString().slice(0, 10);
             document.getElementById('currentDate').textContent = today;
             document.getElementById('reportDate').textContent = today;
             
-            // Check for existing session
             const storedToken = localStorage.getItem('authToken');
             if (storedToken) {
                 authToken = storedToken;
                 validateSession();
-            } else {
-                showLogin();
             }
         });
 
-        // Validate existing session
+        // Validate session
         async function validateSession() {
             try {
-                const response = await fetch('/api/vonage/test', {
-                    headers: {
-                        'Authorization': `Bearer ${authToken}`
-                    }
-                });
+                const response = await fetch('/api/health');
+                const data = await response.json();
                 
-                if (response.ok) {
+                if (data.status === 'OK') {
                     showApp();
                     loadDashboard();
                 } else {
-                    localStorage.removeItem('authToken');
                     showLogin();
                 }
             } catch (error) {
@@ -576,10 +557,9 @@
             }
         }
 
-        // API Helper with automatic authentication
+        // API helper
         async function apiCall(url, options = {}) {
             if (!authToken) {
-                console.error('No auth token available');
                 showLogin();
                 return { success: false, error: 'Not authenticated' };
             }
@@ -592,27 +572,22 @@
                 ...options
             };
 
-            if (options.headers) {
-                defaultOptions.headers = { ...defaultOptions.headers, ...options.headers };
-            }
-
             try {
                 const response = await fetch(url, defaultOptions);
                 
                 if (response.status === 401 || response.status === 403) {
-                    console.log('Session expired');
                     logout();
                     throw new Error('Authentication failed');
                 }
                 
                 return response.json();
             } catch (error) {
-                console.error('API call error:', error);
+                console.error('API error:', error);
                 return { success: false, error: error.message };
             }
         }
 
-        // Manual login functionality
+        // Login
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
@@ -624,7 +599,6 @@
             const password = document.getElementById('password').value;
             
             try {
-                // Hash the password before sending
                 const passHash = await sha256Hex(password);
                 
                 const response = await fetch('/api/login', {
@@ -638,20 +612,14 @@
                 if (data.success) {
                     authToken = data.token;
                     currentUser = data.user;
-                    
-                    // Store token
                     localStorage.setItem('authToken', authToken);
-                    
-                    // Clear form
-                    document.getElementById('password').value = '';
-                    
                     showApp();
                     loadDashboard();
                 } else {
-                    showLoginMessage('error', data.message || 'Invalid email or password');
+                    showLoginMessage('error', data.message || 'Invalid credentials');
                 }
             } catch (error) {
-                showLoginMessage('error', 'Connection error. Please try again.');
+                showLoginMessage('error', 'Connection error');
             } finally {
                 loginButton.disabled = false;
                 loginButton.textContent = 'Sign In';
@@ -700,115 +668,68 @@
             });
             document.getElementById(`${tabName}-tab`).classList.add('active');
             
-            switch(tabName) {
-                case 'dashboard':
-                    loadDashboard();
-                    break;
-                case 'settings':
-                    testConnections();
-                    break;
+            if (tabName === 'settings') {
+                testConnections();
             }
         }
 
-        // Load Dashboard with today's data
+        // Load dashboard
         async function loadDashboard() {
             console.log('Loading dashboard...');
-            await refreshTodayData();
+            await refreshData();
         }
 
-        // Refresh today's SMS data
-        async function refreshTodayData() {
-            console.log('Fetching today\'s SMS data...');
+        // Refresh data - load single account (f3fa74ea)
+        async function refreshData() {
+            console.log('Fetching SMS data...');
             
             const accountContainer = document.getElementById('accountUsageContent');
-            const countryContainer = document.getElementById('countryUsageContent');
+            const countryContainer = document.getElementById('smsUsageContent');
             
             accountContainer.innerHTML = '<div class="loading">Loading account data</div>';
             countryContainer.innerHTML = '<div class="loading">Loading country data</div>';
             
             try {
-                const data = await apiCall('/api/vonage/usage/sms/today-safe');
+                const data = await apiCall('/api/vonage/usage/sms/single-account?account_id=f3fa74ea');
                 console.log('API Response:', data);
-                currentData = data;
                 
-                if (data.success && data.data) {
+                if (data.success) {
                     // Update stats
                     document.getElementById('totalSMS').textContent = data.data.total || '0';
                     document.getElementById('totalSMSChange').textContent = `${data.data.outbound || 0} outbound`;
-                    document.getElementById('activeAccounts').textContent = data.activeAccounts || Object.keys(data.perAccount || {}).length;
-                    
-                    // Update costs with EUR and AUD
-                    const costEUR = data.data.totalCost || 0;
-                    const costAUD = data.data.totalCostAUD || 0;
-                    document.getElementById('totalCostEUR').textContent = `€${costEUR.toFixed(2)}`;
-                    document.getElementById('totalCostAUD').textContent = `A$${costAUD.toFixed(2)}`;
-                    
+                    document.getElementById('activeAccounts').textContent = '1';
+                    document.getElementById('totalCostEUR').textContent = `€${(data.data.totalCost || 0).toFixed(2)}`;
+                    document.getElementById('totalCostAUD').textContent = `A$${(data.data.totalCostAUD || 0).toFixed(2)}`;
                     document.getElementById('countriesReached').textContent = Object.keys(data.data.byCountry || {}).length;
                     
-                    // Display per-account breakdown
-                    if (data.perAccount && Object.keys(data.perAccount).length > 0) {
-                        let html = '<table class="table">';
-                        html += '<thead><tr>';
-                        html += '<th>Account ID</th>';
-                        html += '<th>SMS Count</th>';
-                        html += '<th>Cost (EUR)</th>';
-                        html += '<th>Cost (AUD)</th>';
-                        html += '<th>Countries</th>';
-                        html += '</tr></thead><tbody>';
-                        
-                        // Sort accounts by SMS count
-                        const sortedAccounts = Object.entries(data.perAccount)
-                            .sort((a, b) => b[1].count - a[1].count);
-                        
-                        for (const [accountId, info] of sortedAccounts) {
-                            const displayId = info.name !== accountId ? 
-                                `${accountId}<span class="account-badge">${info.name}</span>` : 
-                                accountId;
-                            
-                            html += `
+                    // Display account table
+                    accountContainer.innerHTML = `
+                        <table class="table">
+                            <thead>
                                 <tr>
-                                    <td>${displayId}</td>
-                                    <td>${info.count}</td>
-                                    <td>€${(info.cost || 0).toFixed(4)}</td>
-                                    <td>A$${(info.costAUD || 0).toFixed(4)}</td>
-                                    <td>${info.countries ? info.countries.join(', ') : 'N/A'}</td>
+                                    <th>Account ID</th>
+                                    <th>SMS Count</th>
+                                    <th>Cost (EUR)</th>
+                                    <th>Cost (AUD)</th>
                                 </tr>
-                            `;
-                        }
-                        
-                        html += '</tbody></table>';
-                        accountContainer.innerHTML = html;
-                        
-                        console.log(`Found ${sortedAccounts.length} unique accounts with activity`);
-                        
-                        if (sortedAccounts.length === 1) {
-                            accountContainer.innerHTML = `
-                                <div class="warning-info">
-                                    ⚠️ Only 1 account found in the CSV data. The CSV may not be differentiating between sub-accounts properly.
-                                    Click "Debug CSV" to investigate the available fields.
-                                </div>
-                                ${html}
-                            `;
-                        }
-                    } else {
-                        accountContainer.innerHTML = '<div class="empty-state">No account activity today</div>';
-                    }
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>f3fa74ea</td>
+                                    <td>${data.data.total}</td>
+                                    <td>€${(data.data.totalCost || 0).toFixed(4)}</td>
+                                    <td>A$${(data.data.totalCostAUD || 0).toFixed(4)}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    `;
                     
-                    // Display by country
+                    // Display country breakdown
                     if (data.data.byCountry && Object.keys(data.data.byCountry).length > 0) {
-                        let html = '<table class="table">';
-                        html += '<thead><tr>';
-                        html += '<th>Country</th>';
-                        html += '<th>SMS Count</th>';
-                        html += '<th>Cost (EUR)</th>';
-                        html += '<th>Cost (AUD)</th>';
-                        html += '</tr></thead><tbody>';
+                        let html = '<table class="table"><thead><tr><th>Country</th><th>SMS Count</th><th>Cost (EUR)</th><th>Cost (AUD)</th></tr></thead><tbody>';
                         
-                        // Sort countries by SMS count
-                        const sortedCountries = Object.entries(data.data.byCountry)
-                            .sort((a, b) => b[1].count - a[1].count);
-                        
-                        for (const [country, info] of sortedCountries) {
+                        const sorted = Object.entries(data.data.byCountry).sort((a, b) => b[1].count - a[1].count);
+                        for (const [country, info] of sorted) {
                             html += `
                                 <tr>
                                     <td>${country}</td>
@@ -818,13 +739,16 @@
                                 </tr>
                             `;
                         }
-                        
                         html += '</tbody></table>';
                         countryContainer.innerHTML = html;
                     } else {
-                        countryContainer.innerHTML = '<div class="empty-state">No SMS usage today yet</div>';
+                        countryContainer.innerHTML = '<div class="empty-state">No SMS usage today</div>';
                     }
                     
+                    document.getElementById('reportStatus').innerHTML = `
+                        ✅ <strong>Single Account Report</strong> - Account f3fa74ea<br>
+                        Loaded ${data.data.total} SMS records for today
+                    `;
                 } else {
                     console.error('Failed to load data:', data);
                     accountContainer.innerHTML = '<div class="error-message">Failed to load account data</div>';
@@ -837,115 +761,113 @@
             }
         }
 
-        // Debug CSV fields to find account identifiers
-        async function debugCSVFields() {
-            console.log('Debugging CSV fields...');
-            
-            const debugSection = document.getElementById('debugSection');
-            const debugOutput = document.getElementById('debugOutput');
-            
-            debugSection.style.display = 'block';
-            debugOutput.innerHTML = 'Loading CSV field information...';
-            
-            try {
-                const data = await apiCall('/api/debug/csv-fields');
-                
-                if (data.success) {
-                    let output = `Total Records: ${data.totalRecords}\n\n`;
-                    output += `All CSV Fields:\n${data.allFields.join(', ')}\n\n`;
-                    
-                    output += `Potential Account Fields:\n`;
-                    for (const [field, values] of Object.entries(data.potentialAccountFields || {})) {
-                        output += `  ${field}: ${values.join(', ')}\n`;
-                    }
-                    
-                    output += `\nFirst Record:\n${JSON.stringify(data.sampleRecord, null, 2)}`;
-                    
-                    debugOutput.textContent = output;
-                    
-                    console.log('CSV Debug Data:', data);
-                    
-                    // Alert if we find the issue
-                    const accountFields = Object.keys(data.potentialAccountFields || {});
-                    if (accountFields.length === 0) {
-                        alert('No account identifier fields found in CSV. The CSV may not contain sub-account information.');
-                    } else if (accountFields.length === 1 && data.potentialAccountFields[accountFields[0]].length === 1) {
-                        alert(`Only one unique value found in field "${accountFields[0]}". The CSV may not be differentiating between sub-accounts.`);
-                    }
-                } else {
-                    debugOutput.textContent = `Error: ${data.error || 'Could not debug CSV fields'}`;
-                }
-            } catch (error) {
-                debugOutput.textContent = `Error: ${error.message}`;
-            }
-        }
-
-        // Load yesterday's data
-        async function loadYesterday() {
-            const yesterday = new Date();
-            yesterday.setDate(yesterday.getDate() - 1);
-            const dateStr = yesterday.toISOString().slice(0, 10);
-            
-            console.log(`Loading data for ${dateStr}...`);
+        // Load multiple accounts
+        async function loadMultipleAccounts(limit) {
+            console.log(`Loading ${limit} accounts...`);
             
             const accountContainer = document.getElementById('accountUsageContent');
-            accountContainer.innerHTML = `<div class="loading">Loading data for ${dateStr}</div>`;
+            const countryContainer = document.getElementById('smsUsageContent');
+            
+            accountContainer.innerHTML = `<div class="loading">Querying ${limit} accounts... This may take ${Math.round(limit * 5 / 60)} minutes</div>`;
+            countryContainer.innerHTML = '<div class="loading">Processing...</div>';
+            
+            document.getElementById('reportStatus').innerHTML = `
+                ⏳ <strong>Processing Multiple Accounts</strong><br>
+                Querying ${limit} sub-accounts individually...
+            `;
             
             try {
-                const data = await apiCall(`/api/vonage/usage/sms/${dateStr}`);
+                const data = await apiCall(`/api/vonage/usage/sms/all-accounts?limit=${limit}`);
                 
                 if (data.success) {
-                    // Update the display with yesterday's data
-                    document.getElementById('reportDate').textContent = dateStr;
+                    // Update stats
+                    document.getElementById('totalSMS').textContent = data.data.total || '0';
+                    document.getElementById('totalSMSChange').textContent = `${data.data.outbound || 0} outbound`;
+                    document.getElementById('activeAccounts').textContent = data.activeAccounts || '0';
+                    document.getElementById('accountsStatus').textContent = `of ${data.totalAccountsQueried} queried`;
+                    document.getElementById('totalCostEUR').textContent = `€${(data.data.totalCost || 0).toFixed(2)}`;
+                    document.getElementById('totalCostAUD').textContent = `A$${(data.data.totalCostAUD || 0).toFixed(2)}`;
+                    document.getElementById('countriesReached').textContent = Object.keys(data.data.byCountry || {}).length;
                     
-                    // Reuse the display logic
-                    if (data.data) {
-                        document.getElementById('totalSMS').textContent = data.data.total || '0';
-                        document.getElementById('activeAccounts').textContent = data.activeAccounts || '0';
-                        document.getElementById('totalCostEUR').textContent = `€${(data.data.totalCost || 0).toFixed(2)}`;
-                        document.getElementById('totalCostAUD').textContent = `A$${(data.data.totalCostAUD || 0).toFixed(2)}`;
-                    }
-                    
-                    // Display the per-account data
+                    // Display accounts
                     if (data.perAccount && Object.keys(data.perAccount).length > 0) {
-                        // Reuse the same display logic from refreshTodayData
-                        let html = '<table class="table">';
-                        // ... (same table generation code)
+                        let html = '<table class="table"><thead><tr><th>Account ID</th><th>Name</th><th>SMS Count</th><th>Cost (EUR)</th><th>Cost (AUD)</th><th>Countries</th></tr></thead><tbody>';
+                        
+                        const sorted = Object.entries(data.perAccount).sort((a, b) => b[1].count - a[1].count);
+                        for (const [id, info] of sorted) {
+                            html += `
+                                <tr>
+                                    <td>${info.accountId}</td>
+                                    <td>${info.name}</td>
+                                    <td>${info.count}</td>
+                                    <td>€${(info.cost || 0).toFixed(4)}</td>
+                                    <td>A$${(info.costAUD || 0).toFixed(4)}</td>
+                                    <td>${info.countries.join(', ')}</td>
+                                </tr>
+                            `;
+                        }
+                        html += '</tbody></table>';
                         accountContainer.innerHTML = html;
                     }
+                    
+                    // Display countries
+                    if (data.data.byCountry && Object.keys(data.data.byCountry).length > 0) {
+                        let html = '<table class="table"><thead><tr><th>Country</th><th>SMS Count</th><th>Cost (EUR)</th><th>Cost (AUD)</th></tr></thead><tbody>';
+                        
+                        const sorted = Object.entries(data.data.byCountry).sort((a, b) => b[1].count - a[1].count);
+                        for (const [country, info] of sorted) {
+                            html += `
+                                <tr>
+                                    <td>${country}</td>
+                                    <td>${info.count}</td>
+                                    <td>€${(info.cost || 0).toFixed(4)}</td>
+                                    <td>A$${(info.costAUD || 0).toFixed(4)}</td>
+                                </tr>
+                            `;
+                        }
+                        html += '</tbody></table>';
+                        countryContainer.innerHTML = html;
+                    }
+                    
+                    document.getElementById('reportStatus').innerHTML = `
+                        ✅ <strong>Multi-Account Report Complete</strong><br>
+                        Queried ${data.totalAccountsQueried} of ${data.totalAccountsAvailable} accounts | 
+                        ${data.activeAccounts} have activity | 
+                        ${data.failedAccounts?.length || 0} failed
+                    `;
+                    
+                } else {
+                    accountContainer.innerHTML = '<div class="error-message">Failed to load accounts</div>';
                 }
             } catch (error) {
-                console.error('Error loading yesterday data:', error);
-                accountContainer.innerHTML = '<div class="error-message">Error loading yesterday\'s data</div>';
+                console.error('Error:', error);
+                accountContainer.innerHTML = '<div class="error-message">Error loading data</div>';
             }
         }
 
-        // Test all connections
+        // Test connections
         async function testConnections() {
-            try {
-                const vonageTest = await apiCall('/api/vonage/test');
-                const vonageStatus = document.getElementById('vonageStatus');
-                if (vonageTest.success) {
-                    vonageStatus.innerHTML = '<span class="badge badge-success">Connected</span> Balance: €' + (vonageTest.balance || 0);
-                } else {
-                    vonageStatus.innerHTML = '<span class="badge badge-danger">Not Connected</span>';
-                }
-            } catch (error) {
-                document.getElementById('vonageStatus').innerHTML = '<span class="badge badge-danger">Error</span>';
+            const vonageTest = await apiCall('/api/vonage/test');
+            const vonageStatus = document.getElementById('vonageStatus');
+            
+            if (vonageTest.success) {
+                vonageStatus.innerHTML = `<span class="badge badge-success">Connected</span> Balance: €${vonageTest.balance || 0}`;
+            } else {
+                vonageStatus.innerHTML = `<span class="badge badge-warning">Error: ${vonageTest.error}</span>`;
             }
             
-            try {
-                const subaccounts = await apiCall('/api/vonage/subaccounts/list');
-                const subAccountsStatus = document.getElementById('subAccountsStatus');
-                if (subaccounts.success) {
-                    subAccountsStatus.innerHTML = `<span class="badge badge-success">Ready</span> ${subaccounts.count} sub-accounts registered`;
-                } else {
-                    subAccountsStatus.innerHTML = '<span class="badge badge-warning">Check configuration</span>';
-                }
-            } catch (error) {
-                document.getElementById('subAccountsStatus').innerHTML = '<span class="badge badge-danger">Error</span>';
+            const accounts = await apiCall('/api/vonage/subaccounts/list');
+            const subAccountsStatus = document.getElementById('subAccountsStatus');
+            
+            if (accounts.success) {
+                subAccountsStatus.innerHTML = `<span class="badge badge-success">Found ${accounts.count} sub-accounts</span>`;
+            } else {
+                subAccountsStatus.innerHTML = `<span class="badge badge-warning">Error loading accounts</span>`;
             }
         }
+
+        // Compatibility with old functions
+        window.refreshTodayData = refreshData;
     </script>
 </body>
 </html>
