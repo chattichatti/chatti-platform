@@ -45,7 +45,7 @@ const SAFETY_CONFIG = {
 const users = [{
     id: 1,
     email: 'admin@chatti.com',
-    passwordHash: '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9',
+    passwordHash: '395aa084e764c0e586c561ab571f7a346df3dbd0257c1d586e4152b93009950e',
     role: 'admin',
     name: 'Admin User'
 }];
