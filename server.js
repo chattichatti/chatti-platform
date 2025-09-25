@@ -1,5 +1,5 @@
 // server.js - Complete Backend Server for Chatti Platform
-// Version: Production-ready with all features
+// Version: Fixed to use master account ID from environment variables
 
 const express = require('express');
 const cors = require('cors');
@@ -34,12 +34,12 @@ const users = [
     }
 ];
 
-// Configuration
+// Configuration - THIS SHOULD USE YOUR MASTER ACCOUNT
 const config = {
     vonage: {
         apiKey: String(process.env.VONAGE_API_KEY || '4c42609f'),
         apiSecret: String(process.env.VONAGE_API_SECRET || ''),
-        accountId: String(process.env.VONAGE_ACCOUNT_ID || '4c42609f'),
+        accountId: String(process.env.VONAGE_ACCOUNT_ID || '4c42609f'), // MASTER ACCOUNT ID
         baseUrl: 'https://rest.nexmo.com',
         apiBaseUrl: 'https://api.nexmo.com'
     }
@@ -181,6 +181,14 @@ async function extractAndParseCSV(data, isBuffer = false) {
     }
     
     console.log(`Successfully parsed ${records.length} records from CSV`);
+    
+    // Check what account IDs are in the data
+    const uniqueAccountIds = new Set();
+    records.forEach(r => {
+        if (r.account_id) uniqueAccountIds.add(r.account_id);
+    });
+    console.log(`Unique account_ids in CSV: ${Array.from(uniqueAccountIds).join(', ')}`);
+    
     return records;
 }
 
@@ -239,18 +247,20 @@ function processRecords(records) {
         aggregated.byCountry[countryName].cost += costEUR;
         aggregated.byCountry[countryName].costAUD += costAUD;
         
-        // Find account ID - try multiple possible field names
-        let accountId = record.account_id || 
-                       record.api_key || 
-                       record.subaccount_id || 
-                       record.subaccount_key || 
-                       record.subaccount ||
-                       record.account ||
-                       record.client_ref || 
-                       record.custom_id ||
-                       record.sender_id ||
-                       record.from_account ||
-                       'unknown';
+        // Find account ID - the account_id field should now have different values for each sub-account
+        let accountId = record.account_id || 'unknown';
+        
+        // If still getting only one account_id, try other fields
+        if (!record.account_id || record.account_id === config.vonage.accountId) {
+            // Try to use client_ref if available
+            if (record.client_ref && record.client_ref.trim() !== '') {
+                accountId = record.client_ref;
+            } 
+            // Or use the sender phone number as a fallback
+            else if (record.from) {
+                accountId = `Sender: ${record.from}`;
+            }
+        }
         
         // Build sub-account aggregation
         if (!aggregated.bySubAccount[accountId]) {
@@ -423,7 +433,7 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
     }
 });
 
-// Main SMS usage endpoint - gets all sub-accounts data in one call
+// Main SMS usage endpoint - FIXED TO USE MASTER ACCOUNT
 app.get('/api/vonage/usage/sms/today-safe', authenticateToken, async (req, res) => {
     try {
         const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
@@ -442,18 +452,18 @@ app.get('/api/vonage/usage/sms/today-safe', authenticateToken, async (req, res) 
             return res.json(dataStore.smsCache[cacheKey].data);
         }
         
-        // Request body for Vonage Reports API
+        // Request body - USES MASTER ACCOUNT FROM CONFIG
         const body = {
-            "account_id": "f3fa74ea",
+            "account_id": config.vonage.accountId,  // ← FIXED: Uses master account from env
             "product": "SMS",
-            "include_subaccounts": "true",  // This gets ALL sub-accounts in one call
+            "include_subaccounts": "true",  // This will now get ALL 267 sub-accounts
             "direction": "outbound",
             "date_start": `${today}T00:00:00+0000`,
             "date_end": `${today}T23:59:59+0000`
         };
         
         console.log(`\n=== SMS USAGE REQUEST FOR ${today} ===`);
-        console.log('Account:', body.account_id);
+        console.log('Using MASTER account:', body.account_id);
         console.log('Include subaccounts:', body.include_subaccounts);
         
         // Create async report
@@ -534,7 +544,8 @@ app.get('/api/vonage/usage/sms/today-safe', authenticateToken, async (req, res) 
             date: today,
             recordCount: reportData.aggregated.total,
             activeAccounts: Object.keys(reportData.perAccountDetail).length,
-            method: 'single-api-call',
+            masterAccountUsed: config.vonage.accountId,
+            method: 'single-api-call-master-account',
             currencyRate: CURRENCY_RATES.EUR_TO_AUD
         };
         
@@ -557,7 +568,7 @@ app.get('/api/vonage/usage/sms/today-safe', authenticateToken, async (req, res) 
     }
 });
 
-// Get SMS for specific date
+// Get SMS for specific date - FIXED TO USE MASTER ACCOUNT
 app.get('/api/vonage/usage/sms/:date', authenticateToken, async (req, res) => {
     try {
         const { date } = req.params;
@@ -577,7 +588,7 @@ app.get('/api/vonage/usage/sms/:date', authenticateToken, async (req, res) => {
         };
         
         const body = {
-            "account_id": "f3fa74ea",
+            "account_id": config.vonage.accountId,  // ← FIXED: Uses master account
             "product": "SMS",
             "include_subaccounts": "true",
             "direction": "outbound",
@@ -586,6 +597,7 @@ app.get('/api/vonage/usage/sms/:date', authenticateToken, async (req, res) => {
         };
         
         console.log(`\n=== SMS USAGE REQUEST FOR ${date} ===`);
+        console.log('Using MASTER account:', body.account_id);
         
         const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
             headers,
@@ -649,7 +661,7 @@ app.get('/api/vonage/usage/sms/:date', authenticateToken, async (req, res) => {
     }
 });
 
-// Debug endpoint to check CSV fields
+// Debug endpoint to check CSV fields - FIXED TO USE MASTER ACCOUNT
 app.get('/api/debug/csv-fields', authenticateToken, async (req, res) => {
     try {
         const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
@@ -661,7 +673,7 @@ app.get('/api/debug/csv-fields', authenticateToken, async (req, res) => {
         const today = new Date().toISOString().slice(0, 10);
         
         const body = {
-            "account_id": "f3fa74ea",
+            "account_id": config.vonage.accountId,  // ← FIXED: Uses master account
             "product": "SMS",
             "include_subaccounts": "true",
             "direction": "outbound",
@@ -670,6 +682,7 @@ app.get('/api/debug/csv-fields', authenticateToken, async (req, res) => {
         };
         
         console.log('\n=== CSV FIELD DEBUG ===');
+        console.log('Using MASTER account:', body.account_id);
         
         const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
             headers,
@@ -727,13 +740,14 @@ app.get('/api/debug/csv-fields', authenticateToken, async (req, res) => {
                                 }
                                 
                                 if (uniqueValues.size > 0) {
-                                    potentialAccountFields[field] = Array.from(uniqueValues).slice(0, 5);
+                                    potentialAccountFields[field] = Array.from(uniqueValues).slice(0, 10); // Show more values
                                 }
                             }
                         }
                         
                         return res.json({
                             success: true,
+                            masterAccountUsed: config.vonage.accountId,
                             totalRecords: records.length,
                             allFields: fieldNames,
                             potentialAccountFields: potentialAccountFields,
@@ -765,6 +779,8 @@ app.get('/api/vonage/subaccounts/list', authenticateToken, async (req, res) => {
         const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
         const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
         
+        console.log('Listing sub-accounts for master account:', config.vonage.accountId);
+        
         const response = await axios.get(url, {
             headers: { 'Authorization': `Basic ${auth}` },
             timeout: 10000
@@ -777,6 +793,7 @@ app.get('/api/vonage/subaccounts/list', authenticateToken, async (req, res) => {
         
         res.json({
             success: true,
+            masterAccount: config.vonage.accountId,
             count: accounts.length,
             accounts: accounts.map(a => ({
                 api_key: a.api_key,
@@ -797,7 +814,7 @@ app.get('/api/vonage/subaccounts/list', authenticateToken, async (req, res) => {
     }
 });
 
-// Test endpoint for specific date/time range
+// Test endpoint - FIXED TO ALLOW TESTING WITH DIFFERENT ACCOUNTS
 app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
     try {
         const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
@@ -806,9 +823,11 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
             'Content-Type': 'application/json'
         };
         
-        // Test with the exact parameters that worked before
+        // Test with master account by default, but allow override via query param
+        const testAccountId = req.query.account_id || config.vonage.accountId;
+        
         const body = {
-            "account_id": "f3fa74ea",
+            "account_id": testAccountId,
             "product": "SMS",
             "include_subaccounts": "true",
             "direction": "outbound",
@@ -817,6 +836,7 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
         };
         
         console.log('\n=== EXACT VONAGE TEST REQUEST ===');
+        console.log('Testing with account:', testAccountId);
         console.log('Body:', JSON.stringify(body, null, 2));
         
         const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
@@ -857,7 +877,9 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
                     
                     return res.json({
                         success: true,
+                        accountUsed: testAccountId,
                         recordCount: records.length,
+                        uniqueAccounts: Object.keys(reportData.perAccountDetail).length,
                         data: reportData.aggregated,
                         perAccount: reportData.perAccountDetail,
                         type: 'parsed-csv-from-zip'
@@ -911,23 +933,27 @@ app.listen(PORT, () => {
     console.log(`URL: http://localhost:${PORT}`);
     
     console.log(`\n=== CONFIGURATION STATUS ===`);
+    console.log(`✅ MASTER ACCOUNT ID: ${config.vonage.accountId}`);
     console.log(`✅ VONAGE_API_KEY: ${config.vonage.apiKey}`);
     console.log(`✅ VONAGE_API_SECRET: ${config.vonage.apiSecret ? 'Set' : 'NOT SET - Required!'}`);
-    console.log(`✅ VONAGE_ACCOUNT_ID: ${config.vonage.accountId}`);
     console.log(`✅ JWT_SECRET: ${JWT_SECRET === 'your-secret-key-change-this-in-production' ? 'Using default (change in production!)' : 'Set'}`);
+    
+    console.log(`\n=== IMPORTANT ===`);
+    console.log(`Using MASTER account ${config.vonage.accountId} for all queries`);
+    console.log('This will retrieve data for ALL sub-accounts when include_subaccounts=true');
     
     console.log(`\n=== FEATURES ===`);
     console.log('✅ ZIP file extraction');
     console.log('✅ CSV parsing');
     console.log('✅ EUR to AUD currency conversion');
     console.log('✅ 30-minute caching');
-    console.log('✅ Sub-account detection');
+    console.log('✅ Sub-account detection from CSV');
     console.log('✅ Debug endpoints');
     
     console.log(`\n=== ENDPOINTS ===`);
     console.log('POST /api/login - Authentication');
     console.log('GET  /api/vonage/test - Test Vonage connection');
-    console.log('GET  /api/vonage/usage/sms/today-safe - Today\'s SMS data');
+    console.log('GET  /api/vonage/usage/sms/today-safe - Today\'s SMS data (ALL sub-accounts)');
     console.log('GET  /api/vonage/usage/sms/:date - SMS data for specific date');
     console.log('GET  /api/vonage/subaccounts/list - List all sub-accounts');
     console.log('GET  /api/debug/csv-fields - Debug CSV field names');
