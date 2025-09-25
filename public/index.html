@@ -398,8 +398,9 @@
             <!-- Dashboard Tab -->
             <div id="dashboard-tab" class="tab-content active">
                 <div class="summary-info">
-                    <strong>📊 Today's SMS Usage Report</strong> - 
-                    Showing all SMS activity for <span id="reportDate"></span> across master account and all sub-accounts
+                    <strong>📊 Today's SMS Usage Report (SAFE MODE)</strong> - 
+                    <span style="color: green;">✓ Limited to 10 accounts to prevent excessive charges</span><br>
+                    Showing SMS activity for <span id="reportDate"></span> - Individual account queries
                 </div>
 
                 <div class="stats-grid">
@@ -429,8 +430,8 @@
                     <div class="section-title">
                         SMS Usage by Country (Today)
                         <div>
-                            <button class="btn btn-primary" onclick="refreshTodayData()">Refresh Today</button>
-                            <button class="btn btn-secondary" onclick="loadYesterday()">Yesterday</button>
+                            <button class="btn btn-primary" onclick="refreshTodayData()">Refresh (10 accounts)</button>
+                            <button class="btn btn-secondary" onclick="testSingleAccount()">Test 1 Account</button>
                         </div>
                     </div>
                     <div id="smsUsageContent">
@@ -441,6 +442,9 @@
                 <div class="section">
                     <div class="section-title">
                         SMS by Account (Today)
+                        <span style="font-size: 14px; color: #6c757d; margin-left: 10px;">
+                            <span id="accountsWithData">0</span> of <span id="totalAccounts">0</span> accounts active
+                        </span>
                     </div>
                     <div id="accountUsageContent">
                         <div class="loading">Loading account data</div>
@@ -751,55 +755,53 @@
             }
         }
 
-        // Load yesterday's data
-        async function loadYesterday() {
-            console.log('Fetching yesterday\'s SMS data...');
-            
-            const yesterday = new Date();
-            yesterday.setDate(yesterday.getDate() - 1);
-            const yesterdayStr = yesterday.toISOString().slice(0, 10);
-            
-            document.getElementById('reportDate').textContent = yesterdayStr;
+        // Test single account (safest option)
+        async function testSingleAccount() {
+            console.log('Testing single account (f3fa74ea from CSV)...');
             
             const smsContainer = document.getElementById('smsUsageContent');
-            smsContainer.innerHTML = '<div class="loading">Loading yesterday\'s SMS data</div>';
+            smsContainer.innerHTML = '<div class="loading">Testing single account f3fa74ea...</div>';
             
             try {
-                const data = await apiCall(`/api/vonage/usage/sms/${yesterdayStr}`);
-                console.log('Yesterday\'s data:', data);
+                const data = await apiCall('/api/test/single-account');
+                console.log('Single account test:', data);
                 
-                // Update display similar to today's data
-                if (data.success && data.data) {
-                    // Update stats for yesterday
-                    document.getElementById('totalSMS').textContent = data.data.total || '0';
-                    document.getElementById('totalSMSChange').textContent = `Yesterday (${yesterdayStr})`;
-                    document.getElementById('activeAccounts').textContent = Object.keys(data.data.bySubAccount || {}).length;
-                    document.getElementById('totalCost').textContent = `$${(data.data.totalCost || 0).toFixed(2)}`;
-                    
-                    // Display data similar to today
-                    if (data.data.byCountry && Object.keys(data.data.byCountry).length > 0) {
-                        let html = '<table class="table"><thead><tr><th>Country</th><th>SMS Count</th><th>Cost (USD)</th></tr></thead><tbody>';
+                if (data.success) {
+                    if (data.recordCount > 0) {
+                        let html = '<div class="summary-info">Single Account Test: ' + data.account + ' - ' + data.recordCount + ' records</div>';
+                        html += '<table class="table"><thead><tr><th>Country</th><th>SMS Count</th><th>Cost (USD)</th></tr></thead><tbody>';
                         
-                        for (const [country, info] of Object.entries(data.data.byCountry)) {
+                        for (const [country, info] of Object.entries(data.data.byCountry || {})) {
                             html += `
                                 <tr>
                                     <td>${country}</td>
                                     <td>${info.count}</td>
-                                    <td>$${(info.cost || 0).toFixed(4)}</td>
+                                    <td>${(info.cost || 0).toFixed(4)}</td>
                                 </tr>
                             `;
                         }
                         
                         html += '</tbody></table>';
                         smsContainer.innerHTML = html;
+                        
+                        // Update totals
+                        document.getElementById('totalSMS').textContent = data.recordCount;
+                        document.getElementById('totalCost').textContent = `${(data.data.totalCost || 0).toFixed(2)}`;
                     } else {
-                        smsContainer.innerHTML = `<div class="empty-state">No SMS usage on ${yesterdayStr}</div>`;
+                        smsContainer.innerHTML = '<div class="empty-state">No SMS data for account ' + data.account + ' today</div>';
                     }
+                } else {
+                    smsContainer.innerHTML = '<div class="error-message">Failed to test single account</div>';
                 }
             } catch (error) {
-                console.error('Error loading yesterday:', error);
-                smsContainer.innerHTML = '<div class="error-message">Failed to load yesterday\'s data</div>';
+                console.error('Single account test error:', error);
+                smsContainer.innerHTML = '<div class="error-message">Error testing single account</div>';
             }
+        }
+        
+        // Load yesterday's data - DISABLED for safety
+        function loadYesterday() {
+            alert('Yesterday queries disabled for safety. Use single account test instead.');
         }
 
         // Test all connections

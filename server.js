@@ -178,6 +178,11 @@ function authenticateToken(req, res, next) {
 
 // =================== SMS DATA PROCESSING ===================
 
+// Currency conversion rates (update these as needed)
+const CURRENCY_RATES = {
+    EUR_TO_AUD: 1.64  // 1 EUR = 1.64 AUD (approximate, update regularly)
+};
+
 function processRecords(records) {
     const aggregated = {
         total: 0,
@@ -186,7 +191,8 @@ function processRecords(records) {
         byCountry: {},
         bySubAccount: {},
         byDate: {},
-        totalCost: 0
+        totalCost: 0,        // in EUR
+        totalCostAUD: 0      // in AUD
     };
     
     if (!Array.isArray(records)) return aggregated;
@@ -201,9 +207,12 @@ function processRecords(records) {
             aggregated.inbound++;
         }
         
-        // Handle cost - Vonage CSV uses 'total_price' field
-        const cost = parseFloat(record.total_price || record.price || record.cost || 0);
-        aggregated.totalCost += cost;
+        // Handle cost - Vonage CSV uses 'total_price' field in EUR
+        const costEUR = parseFloat(record.total_price || record.price || record.cost || 0);
+        const costAUD = costEUR * CURRENCY_RATES.EUR_TO_AUD;
+        
+        aggregated.totalCost += costEUR;
+        aggregated.totalCostAUD += costAUD;
         
         // Handle country - Vonage CSV uses 'country' and 'country_name' fields
         const countryCode = record.country || record.to_country || getCountryFromNumber(record.to);
@@ -214,11 +223,13 @@ function processRecords(records) {
                 code: countryCode,
                 name: countryName,
                 count: 0,
-                cost: 0
+                cost: 0,      // EUR
+                costAUD: 0    // AUD
             };
         }
         aggregated.byCountry[countryName].count++;
-        aggregated.byCountry[countryName].cost += cost;
+        aggregated.byCountry[countryName].cost += costEUR;
+        aggregated.byCountry[countryName].costAUD += costAUD;
         
         // Handle account ID - Vonage CSV uses 'account_id' field
         const accountId = record.account_id || record.api_key || 'unknown';
@@ -227,21 +238,28 @@ function processRecords(records) {
             aggregated.bySubAccount[accountId] = {
                 accountId: accountId,
                 count: 0,
-                cost: 0
+                cost: 0,      // EUR
+                costAUD: 0    // AUD
             };
         }
         aggregated.bySubAccount[accountId].count++;
-        aggregated.bySubAccount[accountId].cost += cost;
+        aggregated.bySubAccount[accountId].cost += costEUR;
+        aggregated.bySubAccount[accountId].costAUD += costAUD;
         
         // Handle date fields
         const messageDate = record.date_finalized || record.date_received || record.date_start || record.timestamp;
         if (messageDate) {
             const dateKey = messageDate.slice(0, 10);
             if (!aggregated.byDate[dateKey]) {
-                aggregated.byDate[dateKey] = { count: 0, cost: 0 };
+                aggregated.byDate[dateKey] = { 
+                    count: 0, 
+                    cost: 0,      // EUR
+                    costAUD: 0    // AUD
+                };
             }
             aggregated.byDate[dateKey].count++;
-            aggregated.byDate[dateKey].cost += cost;
+            aggregated.byDate[dateKey].cost += costEUR;
+            aggregated.byDate[dateKey].costAUD += costAUD;
         }
     }
     
@@ -334,103 +352,189 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
 
 // =================== MAIN SMS REPORTING ENDPOINTS ===================
 
-// Main endpoint the UI uses for today's data
-app.get('/api/vonage/usage/sms/today-safe', authenticateToken, async (req, res) => {
+// Main endpoint - Query ALL accounts individually for today
+app.get('/api/vonage/usage/sms/all-accounts-today', authenticateToken, async (req, res) => {
     try {
+        const today = new Date().toISOString().slice(0, 10);
+        
+        // Check cache first (1 hour cache for all accounts data)
+        const cacheKey = `all_accounts_${today}`;
+        if (dataStore.smsCache[cacheKey] && 
+            (Date.now() - dataStore.smsCache[cacheKey].timestamp) < 60 * 60 * 1000) {
+            console.log('Returning cached data for all accounts');
+            return res.json(dataStore.smsCache[cacheKey].data);
+        }
+        
         const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
         const headers = {
             'Authorization': `Basic ${auth}`,
             'Content-Type': 'application/json'
         };
         
-        const today = new Date().toISOString().slice(0, 10);
+        console.log(`\n=== FETCHING SMS FOR ALL ACCOUNTS - ${today} ===`);
         
-        // Check cache
-        const cacheKey = `sms_${today}`;
-        if (dataStore.smsCache[cacheKey] && 
-            (Date.now() - dataStore.smsCache[cacheKey].timestamp) < 30 * 60 * 1000) {
-            console.log('Returning cached data for today');
-            return res.json(dataStore.smsCache[cacheKey].data);
-        }
-        
-        const body = {
-            "account_id": "f3fa74ea",
-            "product": "SMS",
-            "include_subaccounts": "true",
-            "direction": "outbound",
-            "date_start": `${today}T00:00:00+0000`,
-            "date_end": `${today}T23:59:59+0000`
-        };
-        
-        console.log(`\n=== SMS USAGE REQUEST FOR TODAY: ${today} ===`);
-        
-        const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
-            headers,
-            timeout: 30000,
-            validateStatus: () => true
+        // First, get list of all sub-accounts
+        const accountsUrl = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
+        const accountsResponse = await axios.get(accountsUrl, {
+            headers: { 'Authorization': `Basic ${auth}` },
+            timeout: 10000
         });
         
-        if (response.data?.request_id) {
-            console.log('Got async request_id, polling...');
+        let accounts = [];
+        if (accountsResponse.data?._embedded?.subaccounts) {
+            accounts = accountsResponse.data._embedded.subaccounts;
+        }
+        
+        // Add the master account
+        accounts.unshift({ api_key: config.vonage.accountId, name: 'Master Account' });
+        
+        console.log(`Found ${accounts.length} accounts to query`);
+        
+        // Collect all records from all accounts
+        let allRecords = [];
+        let processedAccounts = 0;
+        let failedAccounts = [];
+        
+        // Process accounts in batches to avoid overwhelming the API
+        const batchSize = 5;
+        
+        for (let i = 0; i < accounts.length; i += batchSize) {
+            const batch = accounts.slice(i, Math.min(i + batchSize, accounts.length));
             
-            // Poll for results
-            for (let i = 1; i <= 20; i++) {
-                await new Promise(resolve => setTimeout(resolve, 3000));
-                
-                const statusUrl = `https://api.nexmo.com/v2/reports/${response.data.request_id}`;
-                const statusResponse = await axios.get(statusUrl, { headers });
-                
-                if (statusResponse.data?.request_status === 'SUCCESS') {
-                    const downloadUrl = statusResponse.data?._links?.download_report?.href;
+            const batchPromises = batch.map(async (account) => {
+                try {
+                    const body = {
+                        "account_id": account.api_key,
+                        "product": "SMS",
+                        "direction": "outbound",
+                        "date_start": `${today}T00:00:00+0000`,
+                        "date_end": `${today}T23:59:59+0000`
+                    };
                     
-                    if (downloadUrl) {
-                        console.log(`Downloading ${statusResponse.data.items_count} records...`);
-                        
-                        const dlResponse = await axios.get(downloadUrl, { 
-                            headers, 
-                            timeout: 60000,
-                            responseType: 'arraybuffer'
-                        });
-                        
-                        const records = await extractAndParseCSV(dlResponse.data, true);
-                        const data = processRecords(records);
-                        
-                        const result = {
-                            success: true,
-                            data: data,
-                            date: today,
-                            recordCount: records.length,
-                            accountsQueried: 1,
-                            method: 'vonage-reports-api'
-                        };
-                        
-                        // Cache the result
-                        dataStore.smsCache[cacheKey] = {
-                            data: result,
-                            timestamp: Date.now()
-                        };
-                        
-                        return res.json(result);
+                    const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
+                        headers,
+                        timeout: 30000
+                    });
+                    
+                    // If we get synchronous response (small data)
+                    if (response.data?.records) {
+                        console.log(`✓ ${account.api_key}: ${response.data.records.length} records (sync)`);
+                        return response.data.records;
                     }
+                    
+                    // If async response, poll for it
+                    if (response.data?.request_id) {
+                        for (let j = 1; j <= 10; j++) {
+                            await new Promise(resolve => setTimeout(resolve, 2000));
+                            
+                            const statusUrl = `https://api.nexmo.com/v2/reports/${response.data.request_id}`;
+                            const statusResponse = await axios.get(statusUrl, { headers });
+                            
+                            if (statusResponse.data?.request_status === 'SUCCESS') {
+                                const downloadUrl = statusResponse.data?._links?.download_report?.href;
+                                
+                                if (downloadUrl) {
+                                    const dlResponse = await axios.get(downloadUrl, {
+                                        headers,
+                                        timeout: 30000,
+                                        responseType: 'arraybuffer'
+                                    });
+                                    
+                                    const records = await extractAndParseCSV(dlResponse.data, true);
+                                    console.log(`✓ ${account.api_key}: ${records.length} records (async)`);
+                                    return records;
+                                }
+                            }
+                        }
+                    }
+                    
+                    console.log(`○ ${account.api_key}: No data`);
+                    return [];
+                    
+                } catch (error) {
+                    console.error(`✗ ${account.api_key}: Failed - ${error.message}`);
+                    failedAccounts.push(account.api_key);
+                    return [];
                 }
+            });
+            
+            // Wait for batch to complete
+            const batchResults = await Promise.all(batchPromises);
+            batchResults.forEach(records => {
+                if (records.length > 0) {
+                    allRecords = allRecords.concat(records);
+                    processedAccounts++;
+                }
+            });
+            
+            // Small delay between batches
+            if (i + batchSize < accounts.length) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
             }
         }
         
-        res.json({
-            success: false,
-            message: 'No SMS data for today yet',
-            data: processRecords([]),
-            date: today
+        console.log(`\n=== SUMMARY ===`);
+        console.log(`Processed: ${processedAccounts}/${accounts.length} accounts`);
+        console.log(`Failed: ${failedAccounts.length} accounts`);
+        console.log(`Total records: ${allRecords.length}`);
+        
+        // Process all records
+        const aggregatedData = processRecords(allRecords);
+        
+        // Also create per-account summary
+        const perAccountSummary = {};
+        for (const record of allRecords) {
+            const accountId = record.account_id || 'unknown';
+            if (!perAccountSummary[accountId]) {
+                perAccountSummary[accountId] = {
+                    count: 0,
+                    cost: 0,
+                    countries: new Set()
+                };
+            }
+            perAccountSummary[accountId].count++;
+            perAccountSummary[accountId].cost += parseFloat(record.total_price || 0);
+            perAccountSummary[accountId].countries.add(record.country_name || record.country || 'Unknown');
+        }
+        
+        // Convert sets to arrays
+        Object.keys(perAccountSummary).forEach(key => {
+            perAccountSummary[key].countries = Array.from(perAccountSummary[key].countries);
         });
         
+        const result = {
+            success: true,
+            date: today,
+            data: aggregatedData,
+            perAccount: perAccountSummary,
+            recordCount: allRecords.length,
+            accountsQueried: accounts.length,
+            accountsWithData: processedAccounts,
+            failedAccounts: failedAccounts
+        };
+        
+        // Cache the result
+        dataStore.smsCache[cacheKey] = {
+            data: result,
+            timestamp: Date.now()
+        };
+        
+        res.json(result);
+        
     } catch (error) {
-        console.error('SMS usage error:', error);
+        console.error('All accounts query error:', error);
         res.status(500).json({
             success: false,
             error: error.message,
             data: processRecords([])
         });
     }
+});
+
+// Update the main UI endpoint to use the all-accounts version
+app.get('/api/vonage/usage/sms/today-safe', authenticateToken, async (req, res) => {
+    // Redirect to the all-accounts endpoint
+    res.redirect('/api/vonage/usage/sms/all-accounts-today');
 });
 
 // Get SMS for specific date
