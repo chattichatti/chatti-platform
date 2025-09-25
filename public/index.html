@@ -353,6 +353,31 @@
             margin-bottom: 20px;
             color: #004085;
         }
+        
+        .currency-display {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        
+        .currency-value {
+            font-size: 12px;
+            color: #6c757d;
+        }
+        
+        .currency-value.primary {
+            font-size: 14px;
+            color: #495057;
+            font-weight: 600;
+        }
+
+        .account-badge {
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            margin-left: 5px;
+        }
     </style>
 </head>
 <body>
@@ -398,9 +423,9 @@
             <!-- Dashboard Tab -->
             <div id="dashboard-tab" class="tab-content active">
                 <div class="summary-info">
-                    <strong>📊 Today's SMS Usage Report (SAFE MODE)</strong> - 
-                    <span style="color: green;">✓ Limited to 10 accounts to prevent excessive charges</span><br>
-                    Showing SMS activity for <span id="reportDate"></span> - Individual account queries
+                    <strong>📊 Today's SMS Usage Report</strong> - 
+                    <span style="color: green;">✓ Single API call retrieves all sub-accounts</span><br>
+                    Showing SMS activity for <span id="reportDate"></span> - All accounts in one query
                 </div>
 
                 <div class="stats-grid">
@@ -415,9 +440,9 @@
                         <div class="stat-change">Accounts with SMS today</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-label">Total Cost Today</div>
-                        <div class="stat-value" id="totalCost">$0.00</div>
-                        <div class="stat-change">USD</div>
+                        <div class="stat-label">Total Cost (EUR)</div>
+                        <div class="stat-value" id="totalCostEUR">€0.00</div>
+                        <div class="stat-change" id="totalCostAUD">A$0.00</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-label">Countries Reached</div>
@@ -428,26 +453,23 @@
 
                 <div class="section">
                     <div class="section-title">
-                        SMS Usage by Country (Today)
+                        SMS by API Account (Today)
                         <div>
-                            <button class="btn btn-primary" onclick="refreshTodayData()">Refresh (10 accounts)</button>
-                            <button class="btn btn-secondary" onclick="testSingleAccount()">Test 1 Account</button>
+                            <button class="btn btn-primary" onclick="refreshTodayData()">Refresh Data</button>
+                            <button class="btn btn-secondary" onclick="loadYesterday()">Yesterday</button>
                         </div>
                     </div>
-                    <div id="smsUsageContent">
-                        <div class="loading">Loading today's SMS data</div>
+                    <div id="accountUsageContent">
+                        <div class="loading">Loading account data</div>
                     </div>
                 </div>
 
                 <div class="section">
                     <div class="section-title">
-                        SMS by Account (Today)
-                        <span style="font-size: 14px; color: #6c757d; margin-left: 10px;">
-                            <span id="accountsWithData">0</span> of <span id="totalAccounts">0</span> accounts active
-                        </span>
+                        SMS Usage by Country (Today)
                     </div>
-                    <div id="accountUsageContent">
-                        <div class="loading">Loading account data</div>
+                    <div id="smsUsageContent">
+                        <div class="loading">Loading country data</div>
                     </div>
                 </div>
             </div>
@@ -469,6 +491,12 @@
                                 <span class="badge badge-warning">Checking...</span>
                             </div>
                         </div>
+                        <div class="form-group">
+                            <label>Currency Exchange Rate</label>
+                            <div id="currencyRate">
+                                1 EUR = 1.64 AUD (approx)
+                            </div>
+                        </div>
                         <button class="btn btn-primary" onclick="testConnections()">Test All Connections</button>
                     </div>
                 </div>
@@ -480,6 +508,7 @@
         // Global variables
         let authToken = null;
         let currentUser = null;
+        let currentData = null;
 
         // Helper function to hash password in browser
         async function sha256Hex(s) {
@@ -666,142 +695,152 @@
             await refreshTodayData();
         }
 
-        // Refresh today's SMS data - SAFE VERSION
+        // Refresh today's SMS data
         async function refreshTodayData() {
-            console.log('Fetching today\'s SMS data (SAFE MODE)...');
+            console.log('Fetching today\'s SMS data...');
             
-            const smsContainer = document.getElementById('smsUsageContent');
             const accountContainer = document.getElementById('accountUsageContent');
+            const countryContainer = document.getElementById('smsUsageContent');
             
-            smsContainer.innerHTML = '<div class="loading">Loading today\'s SMS data (safe mode - limited accounts)</div>';
             accountContainer.innerHTML = '<div class="loading">Loading account data</div>';
+            countryContainer.innerHTML = '<div class="loading">Loading country data</div>';
             
             try {
-                // Use the SAFE endpoint that queries accounts individually
                 const data = await apiCall('/api/vonage/usage/sms/today-safe');
                 console.log('API Response:', data);
+                currentData = data;
                 
                 if (data.success && data.data) {
                     // Update stats
                     document.getElementById('totalSMS').textContent = data.data.total || '0';
                     document.getElementById('totalSMSChange').textContent = `${data.data.outbound || 0} outbound`;
-                    document.getElementById('activeAccounts').textContent = Object.keys(data.data.bySubAccount || {}).length;
-                    document.getElementById('totalCost').textContent = `$${(data.data.totalCost || 0).toFixed(2)}`;
+                    document.getElementById('activeAccounts').textContent = data.activeAccounts || Object.keys(data.perAccount || {}).length;
+                    
+                    // Update costs with EUR and AUD
+                    const costEUR = data.data.totalCost || 0;
+                    const costAUD = data.data.totalCostAUD || 0;
+                    document.getElementById('totalCostEUR').textContent = `€${costEUR.toFixed(2)}`;
+                    document.getElementById('totalCostAUD').textContent = `A$${costAUD.toFixed(2)}`;
+                    
                     document.getElementById('countriesReached').textContent = Object.keys(data.data.byCountry || {}).length;
                     
-                    // Display by country
-                    if (data.data.byCountry && Object.keys(data.data.byCountry).length > 0) {
-                        let html = '<table class="table"><thead><tr><th>Country</th><th>SMS Count</th><th>Cost (USD)</th></tr></thead><tbody>';
+                    // Display per-account breakdown
+                    if (data.perAccount && Object.keys(data.perAccount).length > 0) {
+                        let html = '<table class="table">';
+                        html += '<thead><tr>';
+                        html += '<th>Account ID</th>';
+                        html += '<th>SMS Count</th>';
+                        html += '<th>Cost (EUR)</th>';
+                        html += '<th>Cost (AUD)</th>';
+                        html += '<th>Countries</th>';
+                        html += '</tr></thead><tbody>';
                         
-                        for (const [country, info] of Object.entries(data.data.byCountry)) {
-                            html += `
-                                <tr>
-                                    <td>${country}</td>
-                                    <td>${info.count}</td>
-                                    <td>$${(info.cost || 0).toFixed(4)}</td>
-                                </tr>
-                            `;
-                        }
-                        
-                        html += '</tbody></table>';
-                        smsContainer.innerHTML = html;
-                    } else {
-                        smsContainer.innerHTML = '<div class="empty-state">No SMS usage today yet</div>';
-                    }
-                    
-                    // Display by account
-                    if (data.data.bySubAccount && Object.keys(data.data.bySubAccount).length > 0) {
-                        let html = '<table class="table"><thead><tr><th>Account ID</th><th>SMS Count</th><th>Cost (USD)</th></tr></thead><tbody>';
-                        
-                        // Sort by count descending
-                        const sortedAccounts = Object.entries(data.data.bySubAccount)
-                            .sort((a, b) => b[1].count - a[1].count)
-                            .slice(0, 10); // Top 10 accounts
+                        // Sort accounts by SMS count
+                        const sortedAccounts = Object.entries(data.perAccount)
+                            .sort((a, b) => b[1].count - a[1].count);
                         
                         for (const [accountId, info] of sortedAccounts) {
+                            const displayId = info.name !== accountId ? 
+                                `${accountId}<span class="account-badge">${info.name}</span>` : 
+                                accountId;
+                            
                             html += `
                                 <tr>
-                                    <td>${accountId}</td>
+                                    <td>${displayId}</td>
                                     <td>${info.count}</td>
-                                    <td>$${(info.cost || 0).toFixed(4)}</td>
+                                    <td>€${(info.cost || 0).toFixed(4)}</td>
+                                    <td>A$${(info.costAUD || 0).toFixed(4)}</td>
+                                    <td>${info.countries ? info.countries.join(', ') : 'N/A'}</td>
                                 </tr>
                             `;
-                        }
-                        
-                        if (Object.keys(data.data.bySubAccount).length > 10) {
-                            html += `<tr><td colspan="3" style="text-align: center; color: #6c757d;">...and ${Object.keys(data.data.bySubAccount).length - 10} more accounts</td></tr>`;
                         }
                         
                         html += '</tbody></table>';
                         accountContainer.innerHTML = html;
+                        
+                        console.log(`Loaded ${sortedAccounts.length} accounts with activity`);
                     } else {
                         accountContainer.innerHTML = '<div class="empty-state">No account activity today</div>';
                     }
                     
-                    // Show last updated time
-                    if (data.data.total > 0) {
-                        console.log(`Successfully loaded ${data.data.total} SMS records for today`);
-                    }
-                    
-                } else {
-                    console.error('Failed to load data:', data);
-                    smsContainer.innerHTML = '<div class="error-message">Failed to load SMS data</div>';
-                    accountContainer.innerHTML = '<div class="error-message">Failed to load account data</div>';
-                }
-            } catch (error) {
-                console.error('Error fetching SMS data:', error);
-                smsContainer.innerHTML = '<div class="error-message">Error loading SMS data</div>';
-                accountContainer.innerHTML = '<div class="error-message">Error loading account data</div>';
-            }
-        }
-
-        // Test single account (safest option)
-        async function testSingleAccount() {
-            console.log('Testing single account (f3fa74ea from CSV)...');
-            
-            const smsContainer = document.getElementById('smsUsageContent');
-            smsContainer.innerHTML = '<div class="loading">Testing single account f3fa74ea...</div>';
-            
-            try {
-                const data = await apiCall('/api/test/single-account');
-                console.log('Single account test:', data);
-                
-                if (data.success) {
-                    if (data.recordCount > 0) {
-                        let html = '<div class="summary-info">Single Account Test: ' + data.account + ' - ' + data.recordCount + ' records</div>';
-                        html += '<table class="table"><thead><tr><th>Country</th><th>SMS Count</th><th>Cost (USD)</th></tr></thead><tbody>';
+                    // Display by country
+                    if (data.data.byCountry && Object.keys(data.data.byCountry).length > 0) {
+                        let html = '<table class="table">';
+                        html += '<thead><tr>';
+                        html += '<th>Country</th>';
+                        html += '<th>SMS Count</th>';
+                        html += '<th>Cost (EUR)</th>';
+                        html += '<th>Cost (AUD)</th>';
+                        html += '</tr></thead><tbody>';
                         
-                        for (const [country, info] of Object.entries(data.data.byCountry || {})) {
+                        // Sort countries by SMS count
+                        const sortedCountries = Object.entries(data.data.byCountry)
+                            .sort((a, b) => b[1].count - a[1].count);
+                        
+                        for (const [country, info] of sortedCountries) {
                             html += `
                                 <tr>
                                     <td>${country}</td>
                                     <td>${info.count}</td>
-                                    <td>${(info.cost || 0).toFixed(4)}</td>
+                                    <td>€${(info.cost || 0).toFixed(4)}</td>
+                                    <td>A$${(info.costAUD || 0).toFixed(4)}</td>
                                 </tr>
                             `;
                         }
                         
                         html += '</tbody></table>';
-                        smsContainer.innerHTML = html;
-                        
-                        // Update totals
-                        document.getElementById('totalSMS').textContent = data.recordCount;
-                        document.getElementById('totalCost').textContent = `${(data.data.totalCost || 0).toFixed(2)}`;
+                        countryContainer.innerHTML = html;
                     } else {
-                        smsContainer.innerHTML = '<div class="empty-state">No SMS data for account ' + data.account + ' today</div>';
+                        countryContainer.innerHTML = '<div class="empty-state">No SMS usage today yet</div>';
                     }
+                    
+                    // Show method used
+                    if (data.accountsQueried === 1) {
+                        console.log(`✓ Efficient: Only ${data.accountsQueried} API call made`);
+                    }
+                    
                 } else {
-                    smsContainer.innerHTML = '<div class="error-message">Failed to test single account</div>';
+                    console.error('Failed to load data:', data);
+                    accountContainer.innerHTML = '<div class="error-message">Failed to load account data</div>';
+                    countryContainer.innerHTML = '<div class="error-message">Failed to load country data</div>';
                 }
             } catch (error) {
-                console.error('Single account test error:', error);
-                smsContainer.innerHTML = '<div class="error-message">Error testing single account</div>';
+                console.error('Error fetching SMS data:', error);
+                accountContainer.innerHTML = '<div class="error-message">Error loading account data</div>';
+                countryContainer.innerHTML = '<div class="error-message">Error loading country data</div>';
             }
         }
-        
-        // Load yesterday's data - DISABLED for safety
-        function loadYesterday() {
-            alert('Yesterday queries disabled for safety. Use single account test instead.');
+
+        // Load yesterday's data
+        async function loadYesterday() {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const dateStr = yesterday.toISOString().slice(0, 10);
+            
+            console.log(`Loading data for ${dateStr}...`);
+            
+            const accountContainer = document.getElementById('accountUsageContent');
+            accountContainer.innerHTML = `<div class="loading">Loading data for ${dateStr}</div>`;
+            
+            try {
+                const data = await apiCall(`/api/vonage/usage/sms/${dateStr}`);
+                
+                if (data.success) {
+                    // Update the display with yesterday's data
+                    document.getElementById('reportDate').textContent = dateStr;
+                    
+                    // Process the response similar to today's data
+                    // You can reuse the same display logic
+                    if (data.data) {
+                        document.getElementById('totalSMS').textContent = data.data.total || '0';
+                        document.getElementById('totalCostEUR').textContent = `€${(data.data.totalCost || 0).toFixed(2)}`;
+                        document.getElementById('totalCostAUD').textContent = `A$${(data.data.totalCostAUD || 0).toFixed(2)}`;
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading yesterday data:', error);
+                accountContainer.innerHTML = '<div class="error-message">Error loading yesterday\'s data</div>';
+            }
         }
 
         // Test all connections
@@ -810,7 +849,7 @@
                 const vonageTest = await apiCall('/api/vonage/test');
                 const vonageStatus = document.getElementById('vonageStatus');
                 if (vonageTest.success) {
-                    vonageStatus.innerHTML = '<span class="badge badge-success">Connected</span> Balance: $' + (vonageTest.balance || 0);
+                    vonageStatus.innerHTML = '<span class="badge badge-success">Connected</span> Balance: €' + (vonageTest.balance || 0);
                 } else {
                     vonageStatus.innerHTML = '<span class="badge badge-danger">Not Connected</span>';
                 }
@@ -819,15 +858,20 @@
             }
             
             try {
-                const testInfo = await apiCall('/api/test/today');
+                const subaccounts = await apiCall('/api/vonage/subaccounts/list');
                 const reportsStatus = document.getElementById('reportsStatus');
-                if (testInfo.today) {
-                    reportsStatus.innerHTML = `<span class="badge badge-success">Ready</span> Today: ${testInfo.today}`;
+                if (subaccounts.success) {
+                    reportsStatus.innerHTML = `<span class="badge badge-success">Ready</span> ${subaccounts.count} sub-accounts found`;
                 } else {
-                    reportsStatus.innerHTML = '<span class="badge badge-warning">Check logs</span>';
+                    reportsStatus.innerHTML = '<span class="badge badge-warning">Check configuration</span>';
                 }
             } catch (error) {
                 document.getElementById('reportsStatus').innerHTML = '<span class="badge badge-danger">Error</span>';
+            }
+            
+            // Show current exchange rate
+            if (currentData && currentData.currencyRate) {
+                document.getElementById('currencyRate').textContent = `1 EUR = ${currentData.currencyRate} AUD`;
             }
         }
     </script>

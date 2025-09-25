@@ -1,5 +1,5 @@
 // server.js - Complete Backend Server for Chatti Platform with Vonage SMS Reporting
-// Version: Production-ready with ZIP extraction and CSV parsing
+// Version: Production-ready with per-account breakdown from single API call
 
 const express = require('express');
 const cors = require('cors');
@@ -237,6 +237,7 @@ function processRecords(records) {
         if (!aggregated.bySubAccount[accountId]) {
             aggregated.bySubAccount[accountId] = {
                 accountId: accountId,
+                name: record.account_name || accountId,  // Use account name if available
                 count: 0,
                 cost: 0,      // EUR
                 costAUD: 0    // AUD
@@ -352,189 +353,159 @@ app.get('/api/vonage/test', authenticateToken, async (req, res) => {
 
 // =================== MAIN SMS REPORTING ENDPOINTS ===================
 
-// Main endpoint - Query ALL accounts individually for today
-app.get('/api/vonage/usage/sms/all-accounts-today', authenticateToken, async (req, res) => {
+// Main endpoint the UI uses for today's data - with per-account breakdown
+app.get('/api/vonage/usage/sms/today-safe', authenticateToken, async (req, res) => {
     try {
-        const today = new Date().toISOString().slice(0, 10);
-        
-        // Check cache first (1 hour cache for all accounts data)
-        const cacheKey = `all_accounts_${today}`;
-        if (dataStore.smsCache[cacheKey] && 
-            (Date.now() - dataStore.smsCache[cacheKey].timestamp) < 60 * 60 * 1000) {
-            console.log('Returning cached data for all accounts');
-            return res.json(dataStore.smsCache[cacheKey].data);
-        }
-        
         const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
         const headers = {
             'Authorization': `Basic ${auth}`,
             'Content-Type': 'application/json'
         };
         
-        console.log(`\n=== FETCHING SMS FOR ALL ACCOUNTS - ${today} ===`);
+        const today = new Date().toISOString().slice(0, 10);
         
-        // First, get list of all sub-accounts
-        const accountsUrl = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
-        const accountsResponse = await axios.get(accountsUrl, {
-            headers: { 'Authorization': `Basic ${auth}` },
-            timeout: 10000
-        });
-        
-        let accounts = [];
-        if (accountsResponse.data?._embedded?.subaccounts) {
-            accounts = accountsResponse.data._embedded.subaccounts;
+        // Check cache
+        const cacheKey = `sms_${today}`;
+        if (dataStore.smsCache[cacheKey] && 
+            (Date.now() - dataStore.smsCache[cacheKey].timestamp) < 30 * 60 * 1000) {
+            console.log('Returning cached data for today');
+            return res.json(dataStore.smsCache[cacheKey].data);
         }
         
-        // Add the master account
-        accounts.unshift({ api_key: config.vonage.accountId, name: 'Master Account' });
+        const body = {
+            "account_id": "f3fa74ea",
+            "product": "SMS",
+            "include_subaccounts": "true",  // This gets ALL sub-accounts in one API call
+            "direction": "outbound",
+            "date_start": `${today}T00:00:00+0000`,
+            "date_end": `${today}T23:59:59+0000`
+        };
         
-        console.log(`Found ${accounts.length} accounts to query`);
+        console.log(`\n=== SMS USAGE REQUEST FOR TODAY: ${today} ===`);
+        console.log('Using include_subaccounts to get all data in ONE API call');
         
-        // Collect all records from all accounts
-        let allRecords = [];
-        let processedAccounts = 0;
-        let failedAccounts = [];
+        const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
+            headers,
+            timeout: 30000,
+            validateStatus: () => true
+        });
         
-        // Process accounts in batches to avoid overwhelming the API
-        const batchSize = 5;
-        
-        for (let i = 0; i < accounts.length; i += batchSize) {
-            const batch = accounts.slice(i, Math.min(i + batchSize, accounts.length));
+        if (response.data?.request_id) {
+            console.log('Got async request_id, polling...');
             
-            const batchPromises = batch.map(async (account) => {
-                try {
-                    const body = {
-                        "account_id": account.api_key,
-                        "product": "SMS",
-                        "direction": "outbound",
-                        "date_start": `${today}T00:00:00+0000`,
-                        "date_end": `${today}T23:59:59+0000`
-                    };
+            // Poll for results
+            for (let i = 1; i <= 20; i++) {
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                
+                const statusUrl = `https://api.nexmo.com/v2/reports/${response.data.request_id}`;
+                const statusResponse = await axios.get(statusUrl, { headers });
+                
+                if (statusResponse.data?.request_status === 'SUCCESS') {
+                    const downloadUrl = statusResponse.data?._links?.download_report?.href;
                     
-                    const response = await axios.post('https://api.nexmo.com/v2/reports', body, {
-                        headers,
-                        timeout: 30000
-                    });
-                    
-                    // If we get synchronous response (small data)
-                    if (response.data?.records) {
-                        console.log(`✓ ${account.api_key}: ${response.data.records.length} records (sync)`);
-                        return response.data.records;
-                    }
-                    
-                    // If async response, poll for it
-                    if (response.data?.request_id) {
-                        for (let j = 1; j <= 10; j++) {
-                            await new Promise(resolve => setTimeout(resolve, 2000));
+                    if (downloadUrl) {
+                        console.log(`Downloading ${statusResponse.data.items_count} records...`);
+                        
+                        const dlResponse = await axios.get(downloadUrl, { 
+                            headers, 
+                            timeout: 60000,
+                            responseType: 'arraybuffer'
+                        });
+                        
+                        const records = await extractAndParseCSV(dlResponse.data, true);
+                        const data = processRecords(records);
+                        
+                        // Create per-account summary with more detail
+                        const perAccountDetail = {};
+                        const accountNames = {}; // Store account names
+                        
+                        for (const record of records) {
+                            const accountId = record.account_id || record.api_key || 'unknown';
+                            const accountName = record.account_name || '';
                             
-                            const statusUrl = `https://api.nexmo.com/v2/reports/${response.data.request_id}`;
-                            const statusResponse = await axios.get(statusUrl, { headers });
+                            if (accountName && !accountNames[accountId]) {
+                                accountNames[accountId] = accountName;
+                            }
                             
-                            if (statusResponse.data?.request_status === 'SUCCESS') {
-                                const downloadUrl = statusResponse.data?._links?.download_report?.href;
-                                
-                                if (downloadUrl) {
-                                    const dlResponse = await axios.get(downloadUrl, {
-                                        headers,
-                                        timeout: 30000,
-                                        responseType: 'arraybuffer'
-                                    });
-                                    
-                                    const records = await extractAndParseCSV(dlResponse.data, true);
-                                    console.log(`✓ ${account.api_key}: ${records.length} records (async)`);
-                                    return records;
-                                }
+                            if (!perAccountDetail[accountId]) {
+                                perAccountDetail[accountId] = {
+                                    accountId: accountId,
+                                    name: accountName || accountId,
+                                    count: 0,
+                                    cost: 0,      // EUR
+                                    costAUD: 0,   // AUD
+                                    countries: new Set()
+                                };
+                            }
+                            
+                            const costEUR = parseFloat(record.total_price || 0);
+                            const costAUD = costEUR * CURRENCY_RATES.EUR_TO_AUD;
+                            
+                            perAccountDetail[accountId].count++;
+                            perAccountDetail[accountId].cost += costEUR;
+                            perAccountDetail[accountId].costAUD += costAUD;
+                            perAccountDetail[accountId].countries.add(
+                                record.country_name || record.country || 'Unknown'
+                            );
+                            
+                            // Update name if we found it
+                            if (accountName && !perAccountDetail[accountId].name) {
+                                perAccountDetail[accountId].name = accountName;
                             }
                         }
+                        
+                        // Convert sets to arrays and add account names
+                        Object.keys(perAccountDetail).forEach(key => {
+                            perAccountDetail[key].countries = Array.from(perAccountDetail[key].countries);
+                            if (accountNames[key]) {
+                                perAccountDetail[key].name = accountNames[key];
+                            }
+                        });
+                        
+                        // Count unique accounts with activity
+                        const activeAccounts = Object.keys(perAccountDetail).length;
+                        
+                        const result = {
+                            success: true,
+                            data: data,
+                            perAccount: perAccountDetail,  // Detailed per-account breakdown
+                            date: today,
+                            recordCount: records.length,
+                            accountsQueried: 1,  // We made only 1 API call
+                            activeAccounts: activeAccounts,  // Number of accounts with SMS today
+                            method: 'vonage-reports-api-with-subaccounts',
+                            currencyRate: CURRENCY_RATES.EUR_TO_AUD
+                        };
+                        
+                        // Cache the result
+                        dataStore.smsCache[cacheKey] = {
+                            data: result,
+                            timestamp: Date.now()
+                        };
+                        
+                        return res.json(result);
                     }
-                    
-                    console.log(`○ ${account.api_key}: No data`);
-                    return [];
-                    
-                } catch (error) {
-                    console.error(`✗ ${account.api_key}: Failed - ${error.message}`);
-                    failedAccounts.push(account.api_key);
-                    return [];
                 }
-            });
-            
-            // Wait for batch to complete
-            const batchResults = await Promise.all(batchPromises);
-            batchResults.forEach(records => {
-                if (records.length > 0) {
-                    allRecords = allRecords.concat(records);
-                    processedAccounts++;
-                }
-            });
-            
-            // Small delay between batches
-            if (i + batchSize < accounts.length) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
             }
         }
         
-        console.log(`\n=== SUMMARY ===`);
-        console.log(`Processed: ${processedAccounts}/${accounts.length} accounts`);
-        console.log(`Failed: ${failedAccounts.length} accounts`);
-        console.log(`Total records: ${allRecords.length}`);
-        
-        // Process all records
-        const aggregatedData = processRecords(allRecords);
-        
-        // Also create per-account summary
-        const perAccountSummary = {};
-        for (const record of allRecords) {
-            const accountId = record.account_id || 'unknown';
-            if (!perAccountSummary[accountId]) {
-                perAccountSummary[accountId] = {
-                    count: 0,
-                    cost: 0,
-                    countries: new Set()
-                };
-            }
-            perAccountSummary[accountId].count++;
-            perAccountSummary[accountId].cost += parseFloat(record.total_price || 0);
-            perAccountSummary[accountId].countries.add(record.country_name || record.country || 'Unknown');
-        }
-        
-        // Convert sets to arrays
-        Object.keys(perAccountSummary).forEach(key => {
-            perAccountSummary[key].countries = Array.from(perAccountSummary[key].countries);
+        res.json({
+            success: false,
+            message: 'No SMS data for today yet',
+            data: processRecords([]),
+            perAccount: {},
+            date: today
         });
         
-        const result = {
-            success: true,
-            date: today,
-            data: aggregatedData,
-            perAccount: perAccountSummary,
-            recordCount: allRecords.length,
-            accountsQueried: accounts.length,
-            accountsWithData: processedAccounts,
-            failedAccounts: failedAccounts
-        };
-        
-        // Cache the result
-        dataStore.smsCache[cacheKey] = {
-            data: result,
-            timestamp: Date.now()
-        };
-        
-        res.json(result);
-        
     } catch (error) {
-        console.error('All accounts query error:', error);
+        console.error('SMS usage error:', error);
         res.status(500).json({
             success: false,
             error: error.message,
-            data: processRecords([])
+            data: processRecords([]),
+            perAccount: {}
         });
     }
-});
-
-// Update the main UI endpoint to use the all-accounts version
-app.get('/api/vonage/usage/sms/today-safe', authenticateToken, async (req, res) => {
-    // Redirect to the all-accounts endpoint
-    res.redirect('/api/vonage/usage/sms/all-accounts-today');
 });
 
 // Get SMS for specific date
@@ -617,7 +588,44 @@ app.get('/api/vonage/usage/sms/:date', authenticateToken, async (req, res) => {
     }
 });
 
-// Test endpoint - exact Vonage support request
+// List sub-accounts (for reference only - we don't query them individually)
+app.get('/api/vonage/subaccounts/list', authenticateToken, async (req, res) => {
+    try {
+        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
+        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
+        
+        const response = await axios.get(url, {
+            headers: { 'Authorization': `Basic ${auth}` },
+            timeout: 10000
+        });
+        
+        let accounts = [];
+        if (response.data?._embedded?.subaccounts) {
+            accounts = response.data._embedded.subaccounts;
+        }
+        
+        res.json({
+            success: true,
+            count: accounts.length,
+            accounts: accounts.map(a => ({
+                api_key: a.api_key,
+                name: a.name || 'Unnamed',
+                balance: a.balance
+            })),
+            note: 'These accounts are all included when using include_subaccounts=true'
+        });
+        
+    } catch (error) {
+        res.json({
+            success: false,
+            error: error.message,
+            count: 0,
+            accounts: []
+        });
+    }
+});
+
+// Test endpoint
 app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
     try {
         const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
@@ -691,42 +699,6 @@ app.get('/api/test/exact-vonage', authenticateToken, async (req, res) => {
     }
 });
 
-// List sub-accounts
-app.get('/api/vonage/subaccounts/list', authenticateToken, async (req, res) => {
-    try {
-        const auth = Buffer.from(`${config.vonage.apiKey}:${config.vonage.apiSecret}`).toString('base64');
-        const url = `https://api.nexmo.com/accounts/${config.vonage.accountId}/subaccounts`;
-        
-        const response = await axios.get(url, {
-            headers: { 'Authorization': `Basic ${auth}` },
-            timeout: 10000
-        });
-        
-        let accounts = [];
-        if (response.data?._embedded?.subaccounts) {
-            accounts = response.data._embedded.subaccounts;
-        }
-        
-        res.json({
-            success: true,
-            count: accounts.length,
-            accounts: accounts.map(a => ({
-                api_key: a.api_key,
-                name: a.name || 'Unnamed',
-                balance: a.balance
-            }))
-        });
-        
-    } catch (error) {
-        res.json({
-            success: false,
-            error: error.message,
-            count: 0,
-            accounts: []
-        });
-    }
-});
-
 // Redirect old endpoints
 app.get('/api/vonage/usage/sms', authenticateToken, (req, res) => {
     res.redirect('/api/vonage/usage/sms/today-safe');
@@ -769,9 +741,11 @@ app.listen(PORT, () => {
     
     console.log('\n=== FEATURES ===');
     console.log('✅ ZIP file extraction');
-    console.log('✅ CSV parsing');
+    console.log('✅ CSV parsing with per-account breakdown');
+    console.log('✅ EUR to AUD currency conversion');
     console.log('✅ 30-minute caching');
     console.log('✅ Safe polling (max 20 attempts)');
+    console.log('✅ Single API call for all sub-accounts');
     
     console.log('\n========================================\n');
 });
